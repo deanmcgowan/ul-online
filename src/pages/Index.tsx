@@ -66,7 +66,7 @@ const Index = () => {
   // Fetch routes from DB
   useEffect(() => {
     const fetchRoutes = async () => {
-      const { data } = await supabase.from("transit_routes").select("*");
+      const { data } = await (supabase as any).from("transit_routes").select("*");
       if (data) {
         const map: Record<string, string> = {};
         data.forEach((r: any) => {
