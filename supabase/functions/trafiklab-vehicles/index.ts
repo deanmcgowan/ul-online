@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import protobuf from "npm:protobufjs@7.4.0";
 
 const corsHeaders = {
@@ -119,6 +120,44 @@ serve(async (req) => {
         vehicleLabel: e.vehicle.vehicleDesc?.label || "",
         timestamp: e.vehicle.timestamp || 0,
       }));
+
+    // Look up route_id from transit_trips for vehicles missing routeId
+    const tripIdsToResolve = [...new Set(
+      vehicles.filter((v: any) => !v.routeId && v.tripId).map((v: any) => v.tripId)
+    )];
+
+    if (tripIdsToResolve.length > 0) {
+      try {
+        const supabase = createClient(
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+        );
+
+        // Fetch in batches of 500 (Supabase filter limit)
+        const tripRouteMap = new Map<string, string>();
+        for (let i = 0; i < tripIdsToResolve.length; i += 500) {
+          const batch = tripIdsToResolve.slice(i, i + 500);
+          const { data } = await supabase
+            .from("transit_trips")
+            .select("trip_id, route_id")
+            .in("trip_id", batch);
+          if (data) {
+            data.forEach((row: any) => {
+              if (row.route_id) tripRouteMap.set(row.trip_id, row.route_id);
+            });
+          }
+        }
+
+        // Fill in routeId from DB lookup
+        vehicles.forEach((v: any) => {
+          if (!v.routeId && v.tripId) {
+            v.routeId = tripRouteMap.get(v.tripId) || "";
+          }
+        });
+      } catch (e) {
+        console.error("Trip lookup error:", e.message);
+      }
+    }
 
     return new Response(
       JSON.stringify({ vehicles, timestamp: feedObj.header?.timestamp }),
