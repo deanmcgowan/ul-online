@@ -1,1 +1,7 @@
 project_id = "ytaosfryugpwafpjarur"
+
+[functions.trafiklab-vehicles]
+verify_jwt = false
+
+[functions.trafiklab-import]
+verify_jwt = false
