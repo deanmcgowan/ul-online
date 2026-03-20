@@ -14,7 +14,78 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      stop_routes: {
+        Row: {
+          route_id: string
+          stop_id: string
+        }
+        Insert: {
+          route_id: string
+          stop_id: string
+        }
+        Update: {
+          route_id?: string
+          stop_id?: string
+        }
+        Relationships: []
+      }
+      transit_routes: {
+        Row: {
+          route_id: string
+          route_long_name: string | null
+          route_short_name: string | null
+          route_type: number | null
+        }
+        Insert: {
+          route_id: string
+          route_long_name?: string | null
+          route_short_name?: string | null
+          route_type?: number | null
+        }
+        Update: {
+          route_id?: string
+          route_long_name?: string | null
+          route_short_name?: string | null
+          route_type?: number | null
+        }
+        Relationships: []
+      }
+      transit_stops: {
+        Row: {
+          stop_id: string
+          stop_lat: number
+          stop_lon: number
+          stop_name: string
+        }
+        Insert: {
+          stop_id: string
+          stop_lat: number
+          stop_lon: number
+          stop_name: string
+        }
+        Update: {
+          stop_id?: string
+          stop_lat?: number
+          stop_lon?: number
+          stop_name?: string
+        }
+        Relationships: []
+      }
+      transit_trips: {
+        Row: {
+          route_id: string | null
+          trip_id: string
+        }
+        Insert: {
+          route_id?: string | null
+          trip_id: string
+        }
+        Update: {
+          route_id?: string | null
+          trip_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
