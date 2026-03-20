@@ -211,7 +211,17 @@ serve(async (req) => {
     if (tripsText) {
       const trips = parseCSV(tripsText);
       const tripToRoute = new Map<string, string>();
-      trips.forEach((t) => tripToRoute.set(t.trip_id, t.route_id));
+      const tripRows: { trip_id: string; route_id: string }[] = [];
+      trips.forEach((t) => {
+        tripToRoute.set(t.trip_id, t.route_id);
+        tripRows.push({ trip_id: t.trip_id, route_id: t.route_id });
+      });
+
+      console.log(`Found ${tripRows.length} trips, inserting...`);
+      for (let i = 0; i < tripRows.length; i += BATCH_SIZE) {
+        const batch = tripRows.slice(i, i + BATCH_SIZE);
+        await supabase.from("transit_trips").upsert(batch, { onConflict: "trip_id" });
+      }
 
       const stopTimesText = await zip.file("stop_times.txt")?.async("text");
       if (stopTimesText) {
