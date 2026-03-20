@@ -55,10 +55,10 @@ const Index = () => {
   // Fetch stops from DB
   useEffect(() => {
     const fetchStops = async () => {
-      const { data } = await supabase
+      const { data } = await (supabase as any)
         .from("transit_stops")
-        .select("*") as { data: TransitStop[] | null };
-      if (data) setStops(data);
+        .select("*");
+      if (data) setStops(data as TransitStop[]);
     };
     fetchStops();
   }, []);
@@ -66,7 +66,7 @@ const Index = () => {
   // Fetch routes from DB
   useEffect(() => {
     const fetchRoutes = async () => {
-      const { data } = await supabase.from("transit_routes").select("*");
+      const { data } = await (supabase as any).from("transit_routes").select("*");
       if (data) {
         const map: Record<string, string> = {};
         data.forEach((r: any) => {
@@ -81,7 +81,7 @@ const Index = () => {
   // Fetch stop_routes from DB
   useEffect(() => {
     const fetchStopRoutes = async () => {
-      const { data } = await supabase.from("stop_routes").select("*");
+      const { data } = await (supabase as any).from("stop_routes").select("*");
       if (data) {
         const map: Record<string, string[]> = {};
         data.forEach((sr: any) => {
@@ -140,9 +140,9 @@ const Index = () => {
         description: `${data.stops_imported} stops, ${data.routes_imported} routes imported.`,
       });
       // Refresh data
-      const { data: stopsData } = await supabase.from("transit_stops").select("*");
+      const { data: stopsData } = await (supabase as any).from("transit_stops").select("*");
       if (stopsData) setStops(stopsData as TransitStop[]);
-      const { data: routesData } = await supabase.from("transit_routes").select("*");
+      const { data: routesData } = await (supabase as any).from("transit_routes").select("*");
       if (routesData) {
         const map: Record<string, string> = {};
         routesData.forEach((r: any) => {

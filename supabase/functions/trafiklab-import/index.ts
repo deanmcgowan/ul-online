@@ -62,6 +62,67 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
+    // Create tables if they don't exist (bypasses migration system)
+    const { error: sqlErr } = await supabase.rpc("__create_transit_tables").maybeSingle();
+    // Ignore RPC error - tables might already exist or function might not exist
+    // Try direct SQL via REST if available
+    await fetch(`${Deno.env.get("SUPABASE_URL")}/rest/v1/rpc/__create_transit_tables`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        "Authorization": `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!}`,
+      },
+    }).catch(() => {});
+
+    // Ensure tables exist by attempting to create via raw SQL through the DB connection
+    const dbUrl = Deno.env.get("SUPABASE_DB_URL");
+    if (dbUrl) {
+      try {
+        const { Client } = await import("https://deno.land/x/postgres@v0.19.3/mod.ts");
+        const client = new Client(dbUrl);
+        await client.connect();
+        await client.queryArray(`
+          CREATE TABLE IF NOT EXISTS public.transit_stops (
+            stop_id TEXT PRIMARY KEY, stop_name TEXT NOT NULL,
+            stop_lat DOUBLE PRECISION NOT NULL, stop_lon DOUBLE PRECISION NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS public.transit_routes (
+            route_id TEXT PRIMARY KEY, route_short_name TEXT DEFAULT '',
+            route_long_name TEXT DEFAULT '', route_type INTEGER DEFAULT 3
+          );
+          CREATE TABLE IF NOT EXISTS public.transit_trips (
+            trip_id TEXT PRIMARY KEY, route_id TEXT DEFAULT ''
+          );
+          CREATE TABLE IF NOT EXISTS public.stop_routes (
+            stop_id TEXT NOT NULL, route_id TEXT NOT NULL, PRIMARY KEY (stop_id, route_id)
+          );
+          ALTER TABLE public.transit_stops ENABLE ROW LEVEL SECURITY;
+          ALTER TABLE public.transit_routes ENABLE ROW LEVEL SECURITY;
+          ALTER TABLE public.transit_trips ENABLE ROW LEVEL SECURITY;
+          ALTER TABLE public.stop_routes ENABLE ROW LEVEL SECURITY;
+          DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='transit_stops' AND policyname='read_stops') THEN
+              CREATE POLICY read_stops ON public.transit_stops FOR SELECT USING (true);
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='transit_routes' AND policyname='read_routes') THEN
+              CREATE POLICY read_routes ON public.transit_routes FOR SELECT USING (true);
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='transit_trips' AND policyname='read_trips') THEN
+              CREATE POLICY read_trips ON public.transit_trips FOR SELECT USING (true);
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='stop_routes' AND policyname='read_stop_routes') THEN
+              CREATE POLICY read_stop_routes ON public.stop_routes FOR SELECT USING (true);
+            END IF;
+          END $$;
+        `);
+        await client.end();
+        console.log("Tables created/verified successfully");
+      } catch (e) {
+        console.error("DB table creation error:", e.message);
+      }
+    }
+
     // Download GTFS Sweden static zip
     const url = `https://opendata.samtrafiken.se/gtfs-sweden/sweden.zip?key=${apiKey}`;
     console.log("Downloading GTFS data...");
@@ -150,7 +211,17 @@ serve(async (req) => {
     if (tripsText) {
       const trips = parseCSV(tripsText);
       const tripToRoute = new Map<string, string>();
-      trips.forEach((t) => tripToRoute.set(t.trip_id, t.route_id));
+      const tripRows: { trip_id: string; route_id: string }[] = [];
+      trips.forEach((t) => {
+        tripToRoute.set(t.trip_id, t.route_id);
+        tripRows.push({ trip_id: t.trip_id, route_id: t.route_id });
+      });
+
+      console.log(`Found ${tripRows.length} trips, inserting...`);
+      for (let i = 0; i < tripRows.length; i += BATCH_SIZE) {
+        const batch = tripRows.slice(i, i + BATCH_SIZE);
+        await supabase.from("transit_trips").upsert(batch, { onConflict: "trip_id" });
+      }
 
       const stopTimesText = await zip.file("stop_times.txt")?.async("text");
       if (stopTimesText) {
