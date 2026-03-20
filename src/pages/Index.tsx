@@ -55,10 +55,10 @@ const Index = () => {
   // Fetch stops from DB
   useEffect(() => {
     const fetchStops = async () => {
-      const { data } = await supabase
+      const { data } = await (supabase as any)
         .from("transit_stops")
-        .select("*") as { data: TransitStop[] | null };
-      if (data) setStops(data);
+        .select("*");
+      if (data) setStops(data as TransitStop[]);
     };
     fetchStops();
   }, []);
