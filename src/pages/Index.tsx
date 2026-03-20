@@ -81,7 +81,7 @@ const Index = () => {
   // Fetch stop_routes from DB
   useEffect(() => {
     const fetchStopRoutes = async () => {
-      const { data } = await supabase.from("stop_routes").select("*");
+      const { data } = await (supabase as any).from("stop_routes").select("*");
       if (data) {
         const map: Record<string, string[]> = {};
         data.forEach((sr: any) => {
