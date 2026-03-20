@@ -272,7 +272,7 @@ const BusMap = ({
         new Style({
           image: new Icon({
             img: canvas,
-            imgSize: [64, 64],
+            size: [64, 64],
             anchor: [0.5, 0.5],
           }),
         })

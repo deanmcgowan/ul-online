@@ -140,9 +140,9 @@ const Index = () => {
         description: `${data.stops_imported} stops, ${data.routes_imported} routes imported.`,
       });
       // Refresh data
-      const { data: stopsData } = await supabase.from("transit_stops").select("*");
+      const { data: stopsData } = await (supabase as any).from("transit_stops").select("*");
       if (stopsData) setStops(stopsData as TransitStop[]);
-      const { data: routesData } = await supabase.from("transit_routes").select("*");
+      const { data: routesData } = await (supabase as any).from("transit_routes").select("*");
       if (routesData) {
         const map: Record<string, string> = {};
         routesData.forEach((r: any) => {
