@@ -37,8 +37,7 @@ const Index = () => {
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [filteredStop, setFilteredStop] = useState<TransitStop | null>(null);
   const [isVisible, setIsVisible] = useState(true);
-  const [importing, setImporting] = useState(false);
-  const [mapInstance, setMapInstance] = useState<Map | null>(null);
+  const [lastRefresh, setLastRefresh] = useState(Date.now());
   const [lastRefresh, setLastRefresh] = useState(Date.now());
 
   const walkSpeed = parseFloat(localStorage.getItem("walkSpeed") || "4");
