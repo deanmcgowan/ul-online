@@ -23,6 +23,7 @@ import { circular } from "ol/geom/Polygon";
 import { boundingExtent } from "ol/extent";
 import { createBusCanvas, bearingTowardStop } from "@/lib/busIcon";
 import { Button } from "@/components/ui/button";
+import BusPopup from "@/components/BusPopup";
 import "ol/ol.css";
 
 export interface Vehicle {
@@ -89,7 +90,7 @@ const BusMap = ({
   const userSourceRef = useRef(new VectorSource());
   const bufferSourceRef = useRef(new VectorSource());
 
-  const vehicleLayerRef = useRef<VectorLayer<VectorSource> | null>(null);
+  const vehicleLayerRef = useRef<VectorLayer<any> | null>(null);
   const stopsLayerRef = useRef<VectorLayer<ClusterSource> | null>(null);
 
   const [popup, setPopup] = useState<{
@@ -101,14 +102,14 @@ const BusMap = ({
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
-    const clusterSource = new ClusterSource({
+    const stopsCluster = new ClusterSource({
       distance: 40,
       minDistance: 20,
       source: stopsRawSourceRef.current,
     });
 
     const stopsLayer = new VectorLayer({
-      source: clusterSource,
+      source: stopsCluster,
       style: (feature) => {
         const features = feature.get("features");
         const size = features?.length || 1;
@@ -137,9 +138,33 @@ const BusMap = ({
     });
     stopsLayerRef.current = stopsLayer;
 
-    const vehicleLayer = new VectorLayer({
+    const vehicleCluster = new ClusterSource({
+      distance: 30,
       source: vehicleSourceRef.current,
+    });
+
+    const vehicleLayer = new VectorLayer({
+      source: vehicleCluster,
       zIndex: 10,
+      style: (feature) => {
+        const features = feature.get("features");
+        if (!features) return undefined;
+        if (features.length > 1) {
+          return new Style({
+            image: new CircleStyle({
+              radius: 16,
+              fill: new Fill({ color: "rgba(30, 41, 59, 0.85)" }),
+              stroke: new Stroke({ color: "#ffffff", width: 2 }),
+            }),
+            text: new Text({
+              text: features.length.toString(),
+              fill: new Fill({ color: "#ffffff" }),
+              font: "bold 12px system-ui",
+            }),
+          });
+        }
+        return features[0].getStyle() as Style;
+      },
     });
     vehicleLayerRef.current = vehicleLayer;
 
@@ -187,13 +212,27 @@ const BusMap = ({
         e.pixel,
         (feature) => {
           if (handled) return;
-          if (feature.get("featureType") === "vehicle") {
-            const props = feature.getProperties();
-            delete props.geometry;
-            setPopup({ type: "bus", data: props });
-            overlay.setPosition(e.coordinate);
-            onBusClick(props as any);
+          const clusterFeatures = feature.get("features");
+          if (!clusterFeatures) return;
+
+          if (clusterFeatures.length > 1) {
+            const extent = boundingExtent(
+              clusterFeatures.map((f: Feature) =>
+                (f.getGeometry() as Point).getCoordinates()
+              )
+            );
+            map.getView().fit(extent, { padding: [80, 80, 80, 80], duration: 300 });
             handled = true;
+          } else {
+            const vf = clusterFeatures[0];
+            if (vf.get("featureType") === "vehicle") {
+              const props = vf.getProperties();
+              delete props.geometry;
+              setPopup({ type: "bus", data: props });
+              overlay.setPosition(e.coordinate);
+              onBusClick(props as any);
+              handled = true;
+            }
           }
         },
         { layerFilter: (l) => l === vehicleLayer }
@@ -212,9 +251,7 @@ const BusMap = ({
                     (f.getGeometry() as Point).getCoordinates()
                   )
                 );
-                map
-                  .getView()
-                  .fit(extent, { padding: [80, 80, 80, 80], duration: 300 });
+                map.getView().fit(extent, { padding: [80, 80, 80, 80], duration: 300 });
                 handled = true;
               } else {
                 const stopFeature = features[0];
@@ -305,7 +342,6 @@ const BusMap = ({
     if (!userLocation) return;
     const [lon, lat] = userLocation;
 
-    // User position
     const userFeature = new Feature({
       geometry: new Point(fromLonLat([lon, lat])),
     });
@@ -320,7 +356,6 @@ const BusMap = ({
     );
     userSourceRef.current.addFeature(userFeature);
 
-    // Walk buffer
     const walkRadius = (walkSpeed / 3.6) * (bufferMinutes * 60);
     const walkCircle = circular([lon, lat], walkRadius, 64);
     walkCircle.transform("EPSG:4326", "EPSG:3857");
@@ -337,7 +372,6 @@ const BusMap = ({
     );
     bufferSourceRef.current.addFeature(walkFeature);
 
-    // Run buffer
     const runRadius = (runSpeed / 3.6) * (bufferMinutes * 60);
     const runCircle = circular([lon, lat], runRadius, 64);
     runCircle.transform("EPSG:4326", "EPSG:3857");
@@ -356,7 +390,7 @@ const BusMap = ({
   }, [userLocation, walkSpeed, runSpeed, bufferMinutes]);
 
   const popupContent = popup ? (
-    <div className="bg-background rounded-lg shadow-lg border p-3 min-w-[200px] max-w-[280px]">
+    <div className="bg-background rounded-lg shadow-lg border p-3 min-w-[200px] max-w-[280px] relative">
       {popup.type === "stop" ? (
         <div>
           <h3 className="font-semibold text-sm">{popup.data.stop_name}</h3>
@@ -376,16 +410,12 @@ const BusMap = ({
           </Button>
         </div>
       ) : (
-        <div>
-          <h3 className="font-semibold text-sm">
-            Line {popup.data.lineNumber}
-          </h3>
-          <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
-            <p>Speed: {((popup.data.speed || 0) * 3.6).toFixed(0)} km/h</p>
-            <p>Bearing: {(popup.data.bearing || 0).toFixed(0)}°</p>
-            {popup.data.vehicleId && <p>Vehicle: {popup.data.vehicleId}</p>}
-          </div>
-        </div>
+        <BusPopup
+          vehicle={popup.data as Vehicle & { lineNumber: string }}
+          userLocation={userLocation}
+          walkSpeed={walkSpeed}
+          runSpeed={runSpeed}
+        />
       )}
       <button
         className="absolute top-1 right-2 text-muted-foreground hover:text-foreground text-lg leading-none"
