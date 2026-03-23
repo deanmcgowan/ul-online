@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import BusMap, { Vehicle, TransitStop } from "@/components/BusMap";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Settings, X, Locate, Download } from "lucide-react";
+import { Settings, X, Locate } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import RefreshTimer from "@/components/RefreshTimer";
 import Map from "ol/Map";
