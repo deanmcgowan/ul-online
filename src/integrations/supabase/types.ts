@@ -29,6 +29,30 @@ export type Database = {
         }
         Relationships: []
       }
+      stop_times: {
+        Row: {
+          arrival_time: string | null
+          departure_time: string | null
+          stop_id: string
+          stop_sequence: number
+          trip_id: string
+        }
+        Insert: {
+          arrival_time?: string | null
+          departure_time?: string | null
+          stop_id: string
+          stop_sequence: number
+          trip_id: string
+        }
+        Update: {
+          arrival_time?: string | null
+          departure_time?: string | null
+          stop_id?: string
+          stop_sequence?: number
+          trip_id?: string
+        }
+        Relationships: []
+      }
       transit_routes: {
         Row: {
           route_id: string
@@ -91,7 +115,18 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      get_next_stops: {
+        Args: { p_current_seq: number; p_limit?: number; p_trip_id: string }
+        Returns: {
+          arrival_time: string
+          departure_time: string
+          stop_id: string
+          stop_lat: number
+          stop_lon: number
+          stop_name: string
+          stop_sequence: number
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
