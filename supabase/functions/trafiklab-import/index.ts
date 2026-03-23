@@ -46,7 +46,6 @@ serve(async (req) => {
   }
 
   try {
-    // Use GTFS Regional key (UL-specific, much smaller than Sweden-wide)
     const apiKey = Deno.env.get("TRAFIKLAB_GTFS_REGIONAL_STATIC_KEY");
     if (!apiKey) {
       return new Response(
@@ -63,7 +62,6 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Download GTFS Regional UL zip (much smaller than Sweden-wide)
     const url = `https://opendata.samtrafiken.se/gtfs/ul/ul.zip?key=${apiKey}`;
     console.log("Downloading GTFS Regional UL data...");
     const response = await fetch(url);
@@ -90,16 +88,17 @@ serve(async (req) => {
     const stopsText = await zip.file("stops.txt")?.async("text");
     if (!stopsText) throw new Error("stops.txt not found in GTFS zip");
 
-    const allStops = parseCSV(stopsText).map((s) => ({
-      stop_id: s.stop_id,
-      stop_name: s.stop_name,
-      stop_lat: parseFloat(s.stop_lat),
-      stop_lon: parseFloat(s.stop_lon),
-    })).filter((s) => !isNaN(s.stop_lat) && !isNaN(s.stop_lon));
+    const allStops = parseCSV(stopsText)
+      .map((s) => ({
+        stop_id: s.stop_id,
+        stop_name: s.stop_name,
+        stop_lat: parseFloat(s.stop_lat),
+        stop_lon: parseFloat(s.stop_lon),
+      }))
+      .filter((s) => !isNaN(s.stop_lat) && !isNaN(s.stop_lon));
 
     console.log(`Found ${allStops.length} stops`);
 
-    // Insert stops in batches
     const BATCH_SIZE = 500;
     for (let i = 0; i < allStops.length; i += BATCH_SIZE) {
       const batch = allStops.slice(i, i + BATCH_SIZE);
@@ -131,10 +130,11 @@ serve(async (req) => {
       if (error) throw new Error(`Routes insert error: ${error.message}`);
     }
 
-    // Build trip→route mapping and stop_routes from trips.txt + stop_times.txt
-    console.log("Building stop_routes mapping...");
+    // Build trip→route mapping and stop_routes + stop_times from trips.txt + stop_times.txt
+    console.log("Building stop_routes and stop_times...");
     const stopIds = new Set(allStops.map((s) => s.stop_id));
     let stopRoutesCount = 0;
+    let stopTimesCount = 0;
 
     const tripsText = await zip.file("trips.txt")?.async("text");
     if (tripsText) {
@@ -159,17 +159,51 @@ serve(async (req) => {
         const headers = parseCSVLine(lines[0]);
         const tripIdIdx = headers.indexOf("trip_id");
         const stopIdIdx = headers.indexOf("stop_id");
+        const seqIdx = headers.indexOf("stop_sequence");
+        const arrIdx = headers.indexOf("arrival_time");
+        const depIdx = headers.indexOf("departure_time");
+
+        let stBatch: any[] = [];
+        const ST_BATCH = 2000;
 
         for (let i = 1; i < lines.length; i++) {
           const values = parseCSVLine(lines[i]);
           const stopId = values[stopIdIdx];
-          if (stopIds.has(stopId)) {
-            const tripId = values[tripIdIdx];
-            const routeId = tripToRoute.get(tripId);
-            if (routeId) {
-              stopRouteSet.add(`${stopId}|||${routeId}`);
+          const tripId = values[tripIdIdx];
+          const routeId = tripToRoute.get(tripId);
+
+          if (stopIds.has(stopId) && routeId) {
+            stopRouteSet.add(`${stopId}|||${routeId}`);
+          }
+
+          // Collect stop_times
+          if (tripId && stopId) {
+            stBatch.push({
+              trip_id: tripId,
+              stop_id: stopId,
+              stop_sequence: parseInt(values[seqIdx]) || 0,
+              arrival_time: values[arrIdx] || null,
+              departure_time: values[depIdx] || null,
+            });
+
+            if (stBatch.length >= ST_BATCH) {
+              const { error } = await supabase
+                .from("stop_times")
+                .upsert(stBatch, { onConflict: "trip_id,stop_sequence" });
+              if (error) console.error(`stop_times batch error: ${error.message}`);
+              stopTimesCount += stBatch.length;
+              stBatch = [];
             }
           }
+        }
+
+        // Flush remaining stop_times
+        if (stBatch.length > 0) {
+          const { error } = await supabase
+            .from("stop_times")
+            .upsert(stBatch, { onConflict: "trip_id,stop_sequence" });
+          if (error) console.error(`stop_times batch error: ${error.message}`);
+          stopTimesCount += stBatch.length;
         }
 
         const stopRoutes = Array.from(stopRouteSet).map((key) => {
@@ -191,12 +225,15 @@ serve(async (req) => {
       }
     }
 
+    console.log(`Import complete: ${allStops.length} stops, ${routes.length} routes, ${stopTimesCount} stop_times`);
+
     return new Response(
       JSON.stringify({
         success: true,
         stops_imported: allStops.length,
         routes_imported: routes.length,
         stop_routes_imported: stopRoutesCount,
+        stop_times_imported: stopTimesCount,
       }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },

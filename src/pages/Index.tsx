@@ -5,8 +5,26 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Settings, X, Locate, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import RefreshTimer from "@/components/RefreshTimer";
 import Map from "ol/Map";
 import { fromLonLat } from "ol/proj";
+
+async function fetchAllRows<T>(table: string): Promise<T[]> {
+  const all: T[] = [];
+  const PAGE = 1000;
+  let from = 0;
+  while (true) {
+    const { data } = await (supabase as any)
+      .from(table)
+      .select("*")
+      .range(from, from + PAGE - 1);
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
+}
 
 const Index = () => {
   const navigate = useNavigate();
@@ -21,6 +39,7 @@ const Index = () => {
   const [isVisible, setIsVisible] = useState(true);
   const [importing, setImporting] = useState(false);
   const [mapInstance, setMapInstance] = useState<Map | null>(null);
+  const [lastRefresh, setLastRefresh] = useState(Date.now());
 
   const walkSpeed = parseFloat(localStorage.getItem("walkSpeed") || "4");
   const runSpeed = parseFloat(localStorage.getItem("runSpeed") || "9");
@@ -42,6 +61,7 @@ const Index = () => {
         const { data, error } = await supabase.functions.invoke("trafiklab-vehicles");
         if (error) throw error;
         if (data?.vehicles) setVehicles(data.vehicles);
+        setLastRefresh(Date.now());
       } catch (err: any) {
         console.error("Vehicle fetch error:", err);
       }
@@ -52,44 +72,34 @@ const Index = () => {
     return () => clearInterval(interval);
   }, [isVisible]);
 
-  // Fetch stops from DB
+  // Fetch stops from DB (paginated)
   useEffect(() => {
-    const fetchStops = async () => {
-      const { data } = await (supabase as any)
-        .from("transit_stops")
-        .select("*");
-      if (data) setStops(data as TransitStop[]);
-    };
-    fetchStops();
+    fetchAllRows<TransitStop>("transit_stops").then(setStops);
   }, []);
 
   // Fetch routes from DB
   useEffect(() => {
     const fetchRoutes = async () => {
-      const { data } = await (supabase as any).from("transit_routes").select("*");
-      if (data) {
-        const map: Record<string, string> = {};
-        data.forEach((r: any) => {
-          map[r.route_id] = r.route_short_name || r.route_id;
-        });
-        setRouteMap(map);
-      }
+      const data = await fetchAllRows<any>("transit_routes");
+      const map: Record<string, string> = {};
+      data.forEach((r: any) => {
+        map[r.route_id] = r.route_short_name || r.route_id;
+      });
+      setRouteMap(map);
     };
     fetchRoutes();
   }, []);
 
-  // Fetch stop_routes from DB
+  // Fetch stop_routes from DB (paginated)
   useEffect(() => {
     const fetchStopRoutes = async () => {
-      const { data } = await (supabase as any).from("stop_routes").select("*");
-      if (data) {
-        const map: Record<string, string[]> = {};
-        data.forEach((sr: any) => {
-          if (!map[sr.stop_id]) map[sr.stop_id] = [];
-          map[sr.stop_id].push(sr.route_id);
-        });
-        setStopRoutes(map);
-      }
+      const data = await fetchAllRows<any>("stop_routes");
+      const map: Record<string, string[]> = {};
+      data.forEach((sr: any) => {
+        if (!map[sr.stop_id]) map[sr.stop_id] = [];
+        map[sr.stop_id].push(sr.route_id);
+      });
+      setStopRoutes(map);
     };
     fetchStopRoutes();
   }, []);
@@ -105,19 +115,14 @@ const Index = () => {
     return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
-  // Filter by stop
-  const handleStopClick = useCallback(
-    (stop: TransitStop) => {
-      setFilteredStop(stop);
-    },
-    []
-  );
+  const handleStopClick = useCallback((stop: TransitStop) => {
+    setFilteredStop(stop);
+  }, []);
 
   const handleClearFilter = useCallback(() => {
     setFilteredStop(null);
   }, []);
 
-  // Center on user
   const handleLocate = useCallback(() => {
     if (userLocation && mapInstance) {
       mapInstance.getView().animate({
@@ -128,7 +133,6 @@ const Index = () => {
     }
   }, [userLocation, mapInstance]);
 
-  // Import GTFS data
   const handleImport = useCallback(async () => {
     setImporting(true);
     toast({ title: "Importing GTFS data...", description: "This may take a few minutes." });
@@ -140,16 +144,21 @@ const Index = () => {
         description: `${data.stops_imported} stops, ${data.routes_imported} routes imported.`,
       });
       // Refresh data
-      const { data: stopsData } = await (supabase as any).from("transit_stops").select("*");
-      if (stopsData) setStops(stopsData as TransitStop[]);
-      const { data: routesData } = await (supabase as any).from("transit_routes").select("*");
-      if (routesData) {
-        const map: Record<string, string> = {};
-        routesData.forEach((r: any) => {
-          map[r.route_id] = r.route_short_name || r.route_id;
-        });
-        setRouteMap(map);
-      }
+      const stopsData = await fetchAllRows<TransitStop>("transit_stops");
+      setStops(stopsData);
+      const routesData = await fetchAllRows<any>("transit_routes");
+      const map: Record<string, string> = {};
+      routesData.forEach((r: any) => {
+        map[r.route_id] = r.route_short_name || r.route_id;
+      });
+      setRouteMap(map);
+      const srData = await fetchAllRows<any>("stop_routes");
+      const srMap: Record<string, string[]> = {};
+      srData.forEach((sr: any) => {
+        if (!srMap[sr.stop_id]) srMap[sr.stop_id] = [];
+        srMap[sr.stop_id].push(sr.route_id);
+      });
+      setStopRoutes(srMap);
     } catch (err: any) {
       toast({
         title: "Import failed",
@@ -168,7 +177,6 @@ const Index = () => {
         if (allowedRoutes && allowedRoutes.length > 0) {
           return vehicles.filter((v) => allowedRoutes.includes(v.routeId));
         }
-        // Fallback: show vehicles whose stopId matches
         const nearStopIds = stops
           .filter((s) => {
             const dlat = s.stop_lat - filteredStop.stop_lat;
@@ -222,21 +230,16 @@ const Index = () => {
           <p className="text-sm mb-2">
             No stop data loaded. Import GTFS data to see bus stops.
           </p>
-          <Button
-            size="sm"
-            onClick={handleImport}
-            disabled={importing}
-          >
+          <Button size="sm" onClick={handleImport} disabled={importing}>
             <Download className="h-4 w-4 mr-2" />
             {importing ? "Importing..." : "Import GTFS Data"}
           </Button>
         </div>
       )}
 
-      {/* Vehicle count */}
-      <div className="absolute bottom-24 left-4 bg-background/90 backdrop-blur-sm rounded-lg px-3 py-1.5 shadow-md text-xs z-10 border">
-        {filteredVehicles.length} buses
-        {filteredStop ? " (filtered)" : ""}
+      {/* Refresh timer */}
+      <div className="absolute bottom-24 left-4 z-10">
+        <RefreshTimer intervalMs={10000} lastRefresh={lastRefresh} />
       </div>
 
       {/* Control buttons */}
