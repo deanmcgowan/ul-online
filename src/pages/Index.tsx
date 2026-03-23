@@ -132,42 +132,7 @@ const Index = () => {
     }
   }, [userLocation, mapInstance]);
 
-  const handleImport = useCallback(async () => {
-    setImporting(true);
-    toast({ title: "Importing GTFS data...", description: "This may take a few minutes." });
-    try {
-      const { data, error } = await supabase.functions.invoke("trafiklab-import");
-      if (error) throw error;
-      toast({
-        title: "Import complete",
-        description: `${data.stops_imported} stops, ${data.routes_imported} routes imported.`,
-      });
-      // Refresh data
-      const stopsData = await fetchAllRows<TransitStop>("transit_stops");
-      setStops(stopsData);
-      const routesData = await fetchAllRows<any>("transit_routes");
-      const map: Record<string, string> = {};
-      routesData.forEach((r: any) => {
-        map[r.route_id] = r.route_short_name || r.route_id;
-      });
-      setRouteMap(map);
-      const srData = await fetchAllRows<any>("stop_routes");
-      const srMap: Record<string, string[]> = {};
-      srData.forEach((sr: any) => {
-        if (!srMap[sr.stop_id]) srMap[sr.stop_id] = [];
-        srMap[sr.stop_id].push(sr.route_id);
-      });
-      setStopRoutes(srMap);
-    } catch (err: any) {
-      toast({
-        title: "Import failed",
-        description: err.message || "Check edge function logs.",
-        variant: "destructive",
-      });
-    } finally {
-      setImporting(false);
-    }
-  }, [toast]);
+  const [mapInstance, setMapInstance] = useState<Map | null>(null);
 
   // Filter vehicles based on stop_routes
   const filteredVehicles = filteredStop
