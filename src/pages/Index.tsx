@@ -4,7 +4,6 @@ import BusMap, { Vehicle, TransitStop } from "@/components/BusMap";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Settings, X, Locate } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
 import RefreshTimer from "@/components/RefreshTimer";
 import Map from "ol/Map";
 import { fromLonLat } from "ol/proj";
@@ -28,7 +27,6 @@ async function fetchAllRows<T>(table: string): Promise<T[]> {
 
 const Index = () => {
   const navigate = useNavigate();
-  const { toast } = useToast();
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [stops, setStops] = useState<TransitStop[]>([]);
@@ -38,23 +36,20 @@ const Index = () => {
   const [filteredStop, setFilteredStop] = useState<TransitStop | null>(null);
   const [isVisible, setIsVisible] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(Date.now());
-  const [lastRefresh, setLastRefresh] = useState(Date.now());
+  const [mapInstance, setMapInstance] = useState<Map | null>(null);
 
   const walkSpeed = parseFloat(localStorage.getItem("walkSpeed") || "4");
   const runSpeed = parseFloat(localStorage.getItem("runSpeed") || "9");
   const bufferMinutes = parseFloat(localStorage.getItem("bufferMinutes") || "5");
 
-  // Page visibility
   useEffect(() => {
     const handler = () => setIsVisible(!document.hidden);
     document.addEventListener("visibilitychange", handler);
     return () => document.removeEventListener("visibilitychange", handler);
   }, []);
 
-  // Fetch vehicles every 10s when visible
   useEffect(() => {
     if (!isVisible) return;
-
     const fetchVehicles = async () => {
       try {
         const { data, error } = await supabase.functions.invoke("trafiklab-vehicles");
@@ -65,18 +60,15 @@ const Index = () => {
         console.error("Vehicle fetch error:", err);
       }
     };
-
     fetchVehicles();
     const interval = setInterval(fetchVehicles, 10000);
     return () => clearInterval(interval);
   }, [isVisible]);
 
-  // Fetch stops from DB (paginated)
   useEffect(() => {
     fetchAllRows<TransitStop>("transit_stops").then(setStops);
   }, []);
 
-  // Fetch routes from DB
   useEffect(() => {
     const fetchRoutes = async () => {
       const data = await fetchAllRows<any>("transit_routes");
@@ -89,7 +81,6 @@ const Index = () => {
     fetchRoutes();
   }, []);
 
-  // Fetch stop_routes from DB (paginated)
   useEffect(() => {
     const fetchStopRoutes = async () => {
       const data = await fetchAllRows<any>("stop_routes");
@@ -103,7 +94,6 @@ const Index = () => {
     fetchStopRoutes();
   }, []);
 
-  // User geolocation
   useEffect(() => {
     if (!navigator.geolocation) return;
     const watchId = navigator.geolocation.watchPosition(
@@ -132,9 +122,6 @@ const Index = () => {
     }
   }, [userLocation, mapInstance]);
 
-  const [mapInstance, setMapInstance] = useState<Map | null>(null);
-
-  // Filter vehicles based on stop_routes
   const filteredVehicles = filteredStop
     ? (() => {
         const allowedRoutes = stopRoutes[filteredStop.stop_id];
@@ -175,7 +162,6 @@ const Index = () => {
         onMapReady={setMapInstance}
       />
 
-      {/* Filter bar */}
       {filteredStop && (
         <div className="absolute top-4 left-4 right-4 bg-background/95 backdrop-blur-sm rounded-lg px-4 py-3 shadow-lg flex items-center justify-between z-10 border">
           <div>
@@ -188,20 +174,11 @@ const Index = () => {
         </div>
       )}
 
-      {/* Control buttons */}
+      <div className="absolute bottom-24 left-4 z-10">
+        <RefreshTimer intervalMs={10000} lastRefresh={lastRefresh} />
+      </div>
+
       <div className="absolute bottom-6 right-4 flex flex-col gap-2 z-10">
-        {stops.length > 0 && (
-          <Button
-            variant="secondary"
-            size="icon"
-            className="rounded-full shadow-lg h-11 w-11"
-            onClick={handleImport}
-            disabled={importing}
-            title="Re-import GTFS data"
-          >
-            <Download className="h-5 w-5" />
-          </Button>
-        )}
         <Button
           variant="secondary"
           size="icon"
