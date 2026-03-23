@@ -188,24 +188,6 @@ const Index = () => {
         </div>
       )}
 
-      {/* No stops banner */}
-      {stops.length === 0 && (
-        <div className="absolute top-4 left-4 right-4 bg-background/95 backdrop-blur-sm rounded-lg px-4 py-3 shadow-lg z-10 border">
-          <p className="text-sm mb-2">
-            No stop data loaded. Import GTFS data to see bus stops.
-          </p>
-          <Button size="sm" onClick={handleImport} disabled={importing}>
-            <Download className="h-4 w-4 mr-2" />
-            {importing ? "Importing..." : "Import GTFS Data"}
-          </Button>
-        </div>
-      )}
-
-      {/* Refresh timer */}
-      <div className="absolute bottom-24 left-4 z-10">
-        <RefreshTimer intervalMs={10000} lastRefresh={lastRefresh} />
-      </div>
-
       {/* Control buttons */}
       <div className="absolute bottom-6 right-4 flex flex-col gap-2 z-10">
         {stops.length > 0 && (
