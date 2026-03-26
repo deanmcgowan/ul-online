@@ -149,27 +149,32 @@ const Index = () => {
     }
   }, [mapInstance]);
 
+  // Collect all route_ids for a stop AND its nearby siblings (~300m)
+  const getRoutesForStop = useCallback((stop: TransitStop): Set<string> => {
+    const routes = new Set<string>();
+    // Find all stop_ids near this stop (both sides of street, etc.)
+    const nearStopIds = stops
+      .filter((s) => {
+        const dlat = s.stop_lat - stop.stop_lat;
+        const dlon = s.stop_lon - stop.stop_lon;
+        return Math.abs(dlat) < 0.003 && Math.abs(dlon) < 0.003;
+      })
+      .map((s) => s.stop_id);
+    
+    for (const sid of nearStopIds) {
+      const r = stopRoutes[sid];
+      if (r) r.forEach((id) => routes.add(id));
+    }
+    return routes;
+  }, [stops, stopRoutes]);
+
   const filteredVehicles = filteredStop
     ? (() => {
-        const allowedRoutes = stopRoutes[filteredStop.stop_id];
-        if (allowedRoutes && allowedRoutes.length > 0) {
-          return vehicles.filter((v) => allowedRoutes.includes(v.routeId));
+        const allowedRoutes = getRoutesForStop(filteredStop);
+        if (allowedRoutes.size > 0) {
+          return vehicles.filter((v) => allowedRoutes.has(v.routeId));
         }
-        const nearStopIds = stops
-          .filter((s) => {
-            const dlat = s.stop_lat - filteredStop.stop_lat;
-            const dlon = s.stop_lon - filteredStop.stop_lon;
-            return Math.sqrt(dlat * dlat + dlon * dlon) < 0.003;
-          })
-          .map((s) => s.stop_id);
-        const routeIds = new Set(
-          vehicles
-            .filter((v) => nearStopIds.includes(v.stopId))
-            .map((v) => v.routeId)
-        );
-        return routeIds.size > 0
-          ? vehicles.filter((v) => routeIds.has(v.routeId))
-          : vehicles;
+        return vehicles;
       })()
     : vehicles;
 

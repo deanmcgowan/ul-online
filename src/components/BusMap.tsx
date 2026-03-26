@@ -66,25 +66,15 @@ interface BusMapProps {
   onToggleFavorite?: (stop: TransitStop) => void;
 }
 
-/** Deduplicate stops that are very close (e.g. both sides of a street).
- *  Keeps one representative per cluster of ~50m. */
+/** Deduplicate stops using a grid-based O(n) approach. ~50m threshold. */
 function deduplicateStops(stops: TransitStop[]): TransitStop[] {
-  const THRESHOLD = 0.0005; // ~50m
-  const used = new Set<number>();
-  const result: TransitStop[] = [];
-  for (let i = 0; i < stops.length; i++) {
-    if (used.has(i)) continue;
-    result.push(stops[i]);
-    for (let j = i + 1; j < stops.length; j++) {
-      if (used.has(j)) continue;
-      const dlat = stops[i].stop_lat - stops[j].stop_lat;
-      const dlon = stops[i].stop_lon - stops[j].stop_lon;
-      if (Math.abs(dlat) < THRESHOLD && Math.abs(dlon) < THRESHOLD) {
-        used.add(j);
-      }
-    }
+  const CELL = 0.0005; // ~50m
+  const grid: Record<string, TransitStop> = {};
+  for (const s of stops) {
+    const key = `${Math.round(s.stop_lat / CELL)},${Math.round(s.stop_lon / CELL)}`;
+    if (!grid[key]) grid[key] = s;
   }
-  return result;
+  return Object.values(grid);
 }
 
 const BusMap = ({
