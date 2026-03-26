@@ -23,6 +23,7 @@ import { circular } from "ol/geom/Polygon";
 import { boundingExtent } from "ol/extent";
 import { createBusCanvas, bearingTowardStop } from "@/lib/busIcon";
 import { Button } from "@/components/ui/button";
+import { Star } from "lucide-react";
 import BusPopup from "@/components/BusPopup";
 import "ol/ol.css";
 
@@ -61,6 +62,29 @@ interface BusMapProps {
   onStopClick: (stop: TransitStop) => void;
   onBusClick: (vehicle: Vehicle & { lineNumber: string }) => void;
   onMapReady?: (map: Map) => void;
+  isFavorite?: (stopId: string) => boolean;
+  onToggleFavorite?: (stop: TransitStop) => void;
+}
+
+/** Deduplicate stops that are very close (e.g. both sides of a street).
+ *  Keeps one representative per cluster of ~50m. */
+function deduplicateStops(stops: TransitStop[]): TransitStop[] {
+  const THRESHOLD = 0.0005; // ~50m
+  const used = new Set<number>();
+  const result: TransitStop[] = [];
+  for (let i = 0; i < stops.length; i++) {
+    if (used.has(i)) continue;
+    result.push(stops[i]);
+    for (let j = i + 1; j < stops.length; j++) {
+      if (used.has(j)) continue;
+      const dlat = stops[i].stop_lat - stops[j].stop_lat;
+      const dlon = stops[i].stop_lon - stops[j].stop_lon;
+      if (Math.abs(dlat) < THRESHOLD && Math.abs(dlon) < THRESHOLD) {
+        used.add(j);
+      }
+    }
+  }
+  return result;
 }
 
 const BusMap = ({
@@ -75,6 +99,8 @@ const BusMap = ({
   onStopClick,
   onBusClick,
   onMapReady,
+  isFavorite,
+  onToggleFavorite,
 }: BusMapProps) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<Map | null>(null);
@@ -103,8 +129,8 @@ const BusMap = ({
     if (!mapContainerRef.current) return;
 
     const stopsCluster = new ClusterSource({
-      distance: 40,
-      minDistance: 20,
+      distance: 50,
+      minDistance: 25,
       source: stopsRawSourceRef.current,
     });
 
@@ -139,7 +165,7 @@ const BusMap = ({
     stopsLayerRef.current = stopsLayer;
 
     const vehicleCluster = new ClusterSource({
-      distance: 30,
+      distance: 35,
       source: vehicleSourceRef.current,
     });
 
@@ -207,7 +233,6 @@ const BusMap = ({
     map.on("singleclick", (e) => {
       let handled = false;
 
-      // Check vehicles first
       map.forEachFeatureAtPixel(
         e.pixel,
         (feature) => {
@@ -319,12 +344,13 @@ const BusMap = ({
     });
   }, [vehicles, routeMap, filteredStop]);
 
-  // Update stops
+  // Update stops — deduplicate nearby ones
   useEffect(() => {
     const source = stopsRawSourceRef.current;
     source.clear();
 
-    stops.forEach((s) => {
+    const deduped = deduplicateStops(stops);
+    deduped.forEach((s) => {
       const feature = new Feature({
         geometry: new Point(fromLonLat([s.stop_lon, s.stop_lat])),
         featureType: "stop",
@@ -394,20 +420,32 @@ const BusMap = ({
       {popup.type === "stop" ? (
         <div>
           <h3 className="font-semibold text-sm">{popup.data.stop_name}</h3>
-          <p className="text-xs text-muted-foreground mt-1">
-            Stop ID: {popup.data.stop_id}
-          </p>
-          <Button
-            size="sm"
-            className="mt-2 w-full"
-            onClick={() => {
-              onStopClick(popup.data as TransitStop);
-              setPopup(null);
-              overlayRef.current?.setPosition(undefined);
-            }}
-          >
-            Filter buses to this stop
-          </Button>
+          <div className="flex gap-2 mt-2">
+            <Button
+              size="sm"
+              className="flex-1"
+              onClick={() => {
+                onStopClick(popup.data as TransitStop);
+                setPopup(null);
+                overlayRef.current?.setPosition(undefined);
+              }}
+            >
+              Filter buses
+            </Button>
+            {onToggleFavorite && (
+              <Button
+                size="sm"
+                variant={isFavorite?.(popup.data.stop_id) ? "default" : "outline"}
+                onClick={() => {
+                  onToggleFavorite(popup.data as TransitStop);
+                }}
+              >
+                <Star
+                  className={`h-4 w-4 ${isFavorite?.(popup.data.stop_id) ? "fill-current" : ""}`}
+                />
+              </Button>
+            )}
+          </div>
         </div>
       ) : (
         <BusPopup
