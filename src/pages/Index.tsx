@@ -3,8 +3,9 @@ import { useNavigate } from "react-router-dom";
 import BusMap, { Vehicle, TransitStop } from "@/components/BusMap";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Settings, X, Locate } from "lucide-react";
+import { Settings, X, Locate, Star } from "lucide-react";
 import RefreshTimer from "@/components/RefreshTimer";
+import { useFavoriteStops } from "@/hooks/useFavoriteStops";
 import Map from "ol/Map";
 import { fromLonLat } from "ol/proj";
 
@@ -27,6 +28,7 @@ async function fetchAllRows<T>(table: string): Promise<T[]> {
 
 const Index = () => {
   const navigate = useNavigate();
+  const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteStops();
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [stops, setStops] = useState<TransitStop[]>([]);
@@ -37,6 +39,7 @@ const Index = () => {
   const [isVisible, setIsVisible] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(Date.now());
   const [mapInstance, setMapInstance] = useState<Map | null>(null);
+  const [showFavorites, setShowFavorites] = useState(false);
 
   const walkSpeed = parseFloat(localStorage.getItem("walkSpeed") || "4");
   const runSpeed = parseFloat(localStorage.getItem("runSpeed") || "9");
@@ -106,6 +109,7 @@ const Index = () => {
 
   const handleStopClick = useCallback((stop: TransitStop) => {
     setFilteredStop(stop);
+    setShowFavorites(false);
   }, []);
 
   const handleClearFilter = useCallback(() => {
@@ -121,6 +125,29 @@ const Index = () => {
       });
     }
   }, [userLocation, mapInstance]);
+
+  const handleToggleFavorite = useCallback(
+    (stop: TransitStop) => {
+      if (isFavorite(stop.stop_id)) {
+        removeFavorite(stop.stop_id);
+      } else {
+        addFavorite(stop);
+      }
+    },
+    [isFavorite, addFavorite, removeFavorite]
+  );
+
+  const handleFavoriteSelect = useCallback((stop: TransitStop) => {
+    setFilteredStop(stop);
+    setShowFavorites(false);
+    if (mapInstance) {
+      mapInstance.getView().animate({
+        center: fromLonLat([stop.stop_lon, stop.stop_lat]),
+        zoom: 15,
+        duration: 500,
+      });
+    }
+  }, [mapInstance]);
 
   const filteredVehicles = filteredStop
     ? (() => {
@@ -160,6 +187,8 @@ const Index = () => {
         onStopClick={handleStopClick}
         onBusClick={() => {}}
         onMapReady={setMapInstance}
+        isFavorite={isFavorite}
+        onToggleFavorite={handleToggleFavorite}
       />
 
       {filteredStop && (
@@ -174,11 +203,44 @@ const Index = () => {
         </div>
       )}
 
-      <div className="absolute bottom-24 left-4 z-10">
+      {/* Favorites panel */}
+      {showFavorites && favorites.length > 0 && (
+        <div className="absolute top-4 left-4 right-4 bg-background/95 backdrop-blur-sm rounded-lg shadow-lg z-10 border max-h-[50vh] overflow-y-auto">
+          <div className="flex items-center justify-between px-4 py-2 border-b">
+            <p className="text-sm font-semibold">Favorite Stops</p>
+            <Button variant="ghost" size="icon" onClick={() => setShowFavorites(false)}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="py-1">
+            {favorites.map((fav) => (
+              <button
+                key={fav.stop_id}
+                className="w-full text-left px-4 py-2.5 hover:bg-accent text-sm transition-colors"
+                onClick={() => handleFavoriteSelect(fav)}
+              >
+                {fav.stop_name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="absolute bottom-6 left-4 z-10">
         <RefreshTimer intervalMs={10000} lastRefresh={lastRefresh} />
       </div>
 
       <div className="absolute bottom-6 right-4 flex flex-col gap-2 z-10">
+        {favorites.length > 0 && (
+          <Button
+            variant="secondary"
+            size="icon"
+            className="rounded-full shadow-lg h-11 w-11"
+            onClick={() => setShowFavorites(!showFavorites)}
+          >
+            <Star className="h-5 w-5" />
+          </Button>
+        )}
         <Button
           variant="secondary"
           size="icon"

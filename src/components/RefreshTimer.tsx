@@ -19,35 +19,35 @@ const RefreshTimer = ({ intervalMs, lastRefresh }: RefreshTimerProps) => {
     return () => clearInterval(id);
   }, [lastRefresh, intervalMs]);
 
-  const radius = 10;
+  const radius = 14;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference * progress;
 
   return (
-    <div className="flex items-center justify-center w-8 h-8 relative">
-      <svg width="28" height="28" className="-rotate-90">
+    <div className="flex items-center justify-center w-11 h-11 rounded-full bg-background/70 backdrop-blur-sm shadow-md">
+      <svg width="36" height="36" className="-rotate-90">
         <circle
-          cx="14"
-          cy="14"
+          cx="18"
+          cy="18"
           r={radius}
           fill="none"
           stroke="hsl(var(--muted))"
-          strokeWidth="2"
+          strokeWidth="2.5"
         />
         <circle
-          cx="14"
-          cy="14"
+          cx="18"
+          cy="18"
           r={radius}
           fill="none"
           stroke="hsl(var(--primary))"
-          strokeWidth="2"
+          strokeWidth="2.5"
           strokeDasharray={circumference}
           strokeDashoffset={offset}
           strokeLinecap="round"
           style={{ transition: "stroke-dashoffset 200ms linear" }}
         />
       </svg>
-      <Hourglass className="absolute h-3 w-3 text-muted-foreground" />
+      <Hourglass className="absolute h-3.5 w-3.5 text-muted-foreground" />
     </div>
   );
 };
