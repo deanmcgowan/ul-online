@@ -69,12 +69,12 @@ interface BusMapProps {
 /** Deduplicate stops using a grid-based O(n) approach. ~50m threshold. */
 function deduplicateStops(stops: TransitStop[]): TransitStop[] {
   const CELL = 0.0005; // ~50m
-  const grid = new Map<string, TransitStop>();
+  const grid: Record<string, TransitStop> = {};
   for (const s of stops) {
     const key = `${Math.round(s.stop_lat / CELL)},${Math.round(s.stop_lon / CELL)}`;
-    if (!grid.has(key)) grid.set(key, s);
+    if (!grid[key]) grid[key] = s;
   }
-  return Array.from(grid.values());
+  return Object.values(grid);
 }
 
 const BusMap = ({
