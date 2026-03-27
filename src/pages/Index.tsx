@@ -149,6 +149,13 @@ const Index = () => {
         onToggleFavorite={handleToggleFavorite}
       />
 
+      {staticLoading && stops.length === 0 && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/90 backdrop-blur-sm">
+          <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
+          <p className="text-sm text-muted-foreground">{staticProgress}</p>
+        </div>
+      )}
+
       {filteredStop && (
         <div className="absolute top-4 left-4 right-4 bg-background/95 backdrop-blur-sm rounded-lg px-4 py-3 shadow-lg flex items-center justify-between z-10 border">
           <div>
