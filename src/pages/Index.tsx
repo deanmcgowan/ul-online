@@ -13,7 +13,7 @@ import { fromLonLat } from "ol/proj";
 const Index = () => {
   const navigate = useNavigate();
   const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteStops();
-  const { stops, routeMap, stopRoutes, loading: staticLoading, progress: staticProgress } = useStaticData();
+  const { stops, routeMap, stopRoutes, loading: staticLoading, checklist } = useStaticData();
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
