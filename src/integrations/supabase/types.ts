@@ -14,6 +14,24 @@ export type Database = {
   }
   public: {
     Tables: {
+      static_data_meta: {
+        Row: {
+          key: string
+          updated_at: string
+          value: string
+        }
+        Insert: {
+          key: string
+          updated_at?: string
+          value: string
+        }
+        Update: {
+          key?: string
+          updated_at?: string
+          value?: string
+        }
+        Relationships: []
+      }
       stop_routes: {
         Row: {
           route_id: string
