@@ -3,28 +3,12 @@ import { useNavigate } from "react-router-dom";
 import BusMap, { Vehicle, TransitStop } from "@/components/BusMap";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Settings, X, Locate, Star } from "lucide-react";
+import { Settings, X, Locate, Star, Loader2 } from "lucide-react";
 import RefreshTimer from "@/components/RefreshTimer";
 import { useFavoriteStops } from "@/hooks/useFavoriteStops";
+import { useStaticData } from "@/hooks/useStaticData";
 import Map from "ol/Map";
 import { fromLonLat } from "ol/proj";
-
-async function fetchAllRows<T>(table: string): Promise<T[]> {
-  const all: T[] = [];
-  const PAGE = 1000;
-  let from = 0;
-  while (true) {
-    const { data } = await (supabase as any)
-      .from(table)
-      .select("*")
-      .range(from, from + PAGE - 1);
-    if (!data || data.length === 0) break;
-    all.push(...data);
-    if (data.length < PAGE) break;
-    from += PAGE;
-  }
-  return all;
-}
 
 const Index = () => {
   const navigate = useNavigate();
