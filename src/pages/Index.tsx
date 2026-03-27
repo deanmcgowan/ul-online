@@ -13,11 +13,9 @@ import { fromLonLat } from "ol/proj";
 const Index = () => {
   const navigate = useNavigate();
   const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteStops();
+  const { stops, routeMap, stopRoutes, loading: staticLoading, progress: staticProgress } = useStaticData();
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [stops, setStops] = useState<TransitStop[]>([]);
-  const [routeMap, setRouteMap] = useState<Record<string, string>>({});
-  const [stopRoutes, setStopRoutes] = useState<Record<string, string[]>>({});
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [filteredStop, setFilteredStop] = useState<TransitStop | null>(null);
   const [isVisible, setIsVisible] = useState(true);
@@ -51,35 +49,6 @@ const Index = () => {
     const interval = setInterval(fetchVehicles, 10000);
     return () => clearInterval(interval);
   }, [isVisible]);
-
-  useEffect(() => {
-    fetchAllRows<TransitStop>("transit_stops").then(setStops);
-  }, []);
-
-  useEffect(() => {
-    const fetchRoutes = async () => {
-      const data = await fetchAllRows<any>("transit_routes");
-      const map: Record<string, string> = {};
-      data.forEach((r: any) => {
-        map[r.route_id] = r.route_short_name || r.route_id;
-      });
-      setRouteMap(map);
-    };
-    fetchRoutes();
-  }, []);
-
-  useEffect(() => {
-    const fetchStopRoutes = async () => {
-      const data = await fetchAllRows<any>("stop_routes");
-      const map: Record<string, string[]> = {};
-      data.forEach((sr: any) => {
-        if (!map[sr.stop_id]) map[sr.stop_id] = [];
-        map[sr.stop_id].push(sr.route_id);
-      });
-      setStopRoutes(map);
-    };
-    fetchStopRoutes();
-  }, []);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
