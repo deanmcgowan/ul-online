@@ -40,6 +40,16 @@ function parseCSV(text: string): Record<string, string>[] {
   });
 }
 
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -151,7 +161,6 @@ serve(async (req) => {
         await supabase.from("transit_trips").upsert(batch, { onConflict: "trip_id" });
       }
 
-      // Extract only stop_routes (which stop serves which route) - skip stop_times to stay within CPU limits
       const stopTimesText = await zip.file("stop_times.txt")?.async("text");
       if (stopTimesText) {
         const stopRouteSet = new Set<string>();
@@ -190,7 +199,18 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Import complete: ${allStops.length} stops, ${routes.length} routes, ${stopRoutesCount} stop_routes`);
+    // Compute and store combined hash for cache invalidation
+    const hashInput = `${allStops.length}-${routes.length}-${stopRoutesCount}-${Date.now()}`;
+    const combinedHash = simpleHash(hashInput);
+
+    await supabase
+      .from("static_data_meta")
+      .upsert(
+        { key: "combined_hash", value: combinedHash, updated_at: new Date().toISOString() },
+        { onConflict: "key" }
+      );
+
+    console.log(`Import complete: ${allStops.length} stops, ${routes.length} routes, ${stopRoutesCount} stop_routes, hash: ${combinedHash}`);
 
     return new Response(
       JSON.stringify({
@@ -198,6 +218,7 @@ serve(async (req) => {
         stops_imported: allStops.length,
         routes_imported: routes.length,
         stop_routes_imported: stopRoutesCount,
+        hash: combinedHash,
       }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },

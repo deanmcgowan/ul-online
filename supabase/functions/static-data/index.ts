@@ -20,68 +20,63 @@ async function fetchAll(supabase: any, table: string) {
   return all;
 }
 
-function simpleHash(str: string): string {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash |= 0;
-  }
-  return Math.abs(hash).toString(36);
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const url = new URL(req.url);
-    const clientHash = url.searchParams.get("hash") || "";
-    const dataset = url.searchParams.get("dataset") || "all"; // stops, routes, stopRoutes, all
+    const body = await req.json().catch(() => ({}));
+    const clientHash = body.hash || "";
+    const dataset = body.dataset || "all";
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
+    // Quick hash check from metadata table — no need to fetch all data
+    if (clientHash && dataset === "all") {
+      const { data: meta } = await supabase
+        .from("static_data_meta")
+        .select("value")
+        .eq("key", "combined_hash")
+        .single();
+
+      if (meta?.value && meta.value === clientHash) {
+        return new Response(
+          JSON.stringify({ unchanged: true, hash: clientHash }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // Fetch only requested dataset
     const results: Record<string, any> = {};
-    const hashes: Record<string, string> = {};
 
     if (dataset === "all" || dataset === "stops") {
-      const stops = await fetchAll(supabase, "transit_stops");
-      const h = simpleHash(JSON.stringify(stops));
-      hashes.stops = h;
-      results.stops = stops;
+      results.stops = await fetchAll(supabase, "transit_stops");
     }
     if (dataset === "all" || dataset === "routes") {
-      const routes = await fetchAll(supabase, "transit_routes");
-      const h = simpleHash(JSON.stringify(routes));
-      hashes.routes = h;
-      results.routes = routes;
+      results.routes = await fetchAll(supabase, "transit_routes");
     }
     if (dataset === "all" || dataset === "stopRoutes") {
-      const stopRoutes = await fetchAll(supabase, "stop_routes");
-      const h = simpleHash(JSON.stringify(stopRoutes));
-      hashes.stopRoutes = h;
-      results.stopRoutes = stopRoutes;
+      results.stopRoutes = await fetchAll(supabase, "stop_routes");
     }
 
-    // Combine all hashes into one
-    const combinedHash = simpleHash(Object.values(hashes).join(","));
+    // Get current hash from meta
+    const { data: hashMeta } = await supabase
+      .from("static_data_meta")
+      .select("value")
+      .eq("key", "combined_hash")
+      .single();
 
-    // If client already has this data, return 304-like response
-    if (clientHash && clientHash === combinedHash) {
-      return new Response(
-        JSON.stringify({ unchanged: true, hash: combinedHash }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const currentHash = hashMeta?.value || "initial";
 
     return new Response(
       JSON.stringify({
         unchanged: false,
-        hash: combinedHash,
+        hash: currentHash,
         ...results,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import BusMap, { Vehicle, TransitStop } from "@/components/BusMap";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Settings, X, Locate, Star, Loader2 } from "lucide-react";
+import { Settings, X, Locate, Star, Loader2, Check, Circle } from "lucide-react";
 import RefreshTimer from "@/components/RefreshTimer";
 import { useFavoriteStops } from "@/hooks/useFavoriteStops";
 import { useStaticData } from "@/hooks/useStaticData";
@@ -13,7 +13,7 @@ import { fromLonLat } from "ol/proj";
 const Index = () => {
   const navigate = useNavigate();
   const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteStops();
-  const { stops, routeMap, stopRoutes, loading: staticLoading, progress: staticProgress } = useStaticData();
+  const { stops, routeMap, stopRoutes, loading: staticLoading, checklist } = useStaticData();
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
@@ -149,10 +149,25 @@ const Index = () => {
         onToggleFavorite={handleToggleFavorite}
       />
 
-      {staticLoading && stops.length === 0 && (
+      {staticLoading && stops.length === 0 && checklist.length > 0 && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/90 backdrop-blur-sm">
-          <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
-          <p className="text-sm text-muted-foreground">{staticProgress}</p>
+          <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
+          <div className="space-y-2 min-w-[240px]">
+            {checklist.map((item) => (
+              <div key={item.id} className="flex items-center gap-2 text-sm">
+                {item.status === "done" ? (
+                  <Check className="h-4 w-4 text-primary shrink-0" />
+                ) : item.status === "loading" ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+                ) : (
+                  <Circle className="h-4 w-4 text-muted-foreground/40 shrink-0" />
+                )}
+                <span className={item.status === "done" ? "text-muted-foreground" : "text-foreground"}>
+                  {item.label}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
