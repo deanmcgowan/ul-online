@@ -3,37 +3,19 @@ import { useNavigate } from "react-router-dom";
 import BusMap, { Vehicle, TransitStop } from "@/components/BusMap";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Settings, X, Locate, Star } from "lucide-react";
+import { Settings, X, Locate, Star, Loader2 } from "lucide-react";
 import RefreshTimer from "@/components/RefreshTimer";
 import { useFavoriteStops } from "@/hooks/useFavoriteStops";
+import { useStaticData } from "@/hooks/useStaticData";
 import Map from "ol/Map";
 import { fromLonLat } from "ol/proj";
-
-async function fetchAllRows<T>(table: string): Promise<T[]> {
-  const all: T[] = [];
-  const PAGE = 1000;
-  let from = 0;
-  while (true) {
-    const { data } = await (supabase as any)
-      .from(table)
-      .select("*")
-      .range(from, from + PAGE - 1);
-    if (!data || data.length === 0) break;
-    all.push(...data);
-    if (data.length < PAGE) break;
-    from += PAGE;
-  }
-  return all;
-}
 
 const Index = () => {
   const navigate = useNavigate();
   const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteStops();
+  const { stops, routeMap, stopRoutes, loading: staticLoading, progress: staticProgress } = useStaticData();
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [stops, setStops] = useState<TransitStop[]>([]);
-  const [routeMap, setRouteMap] = useState<Record<string, string>>({});
-  const [stopRoutes, setStopRoutes] = useState<Record<string, string[]>>({});
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [filteredStop, setFilteredStop] = useState<TransitStop | null>(null);
   const [isVisible, setIsVisible] = useState(true);
@@ -67,35 +49,6 @@ const Index = () => {
     const interval = setInterval(fetchVehicles, 10000);
     return () => clearInterval(interval);
   }, [isVisible]);
-
-  useEffect(() => {
-    fetchAllRows<TransitStop>("transit_stops").then(setStops);
-  }, []);
-
-  useEffect(() => {
-    const fetchRoutes = async () => {
-      const data = await fetchAllRows<any>("transit_routes");
-      const map: Record<string, string> = {};
-      data.forEach((r: any) => {
-        map[r.route_id] = r.route_short_name || r.route_id;
-      });
-      setRouteMap(map);
-    };
-    fetchRoutes();
-  }, []);
-
-  useEffect(() => {
-    const fetchStopRoutes = async () => {
-      const data = await fetchAllRows<any>("stop_routes");
-      const map: Record<string, string[]> = {};
-      data.forEach((sr: any) => {
-        if (!map[sr.stop_id]) map[sr.stop_id] = [];
-        map[sr.stop_id].push(sr.route_id);
-      });
-      setStopRoutes(map);
-    };
-    fetchStopRoutes();
-  }, []);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -195,6 +148,13 @@ const Index = () => {
         isFavorite={isFavorite}
         onToggleFavorite={handleToggleFavorite}
       />
+
+      {staticLoading && stops.length === 0 && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/90 backdrop-blur-sm">
+          <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
+          <p className="text-sm text-muted-foreground">{staticProgress}</p>
+        </div>
+      )}
 
       {filteredStop && (
         <div className="absolute top-4 left-4 right-4 bg-background/95 backdrop-blur-sm rounded-lg px-4 py-3 shadow-lg flex items-center justify-between z-10 border">
