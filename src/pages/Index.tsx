@@ -149,14 +149,14 @@ const Index = () => {
         onToggleFavorite={handleToggleFavorite}
       />
 
-      {(staticLoading && stops.length === 0) || checklist.length > 0 ? (
+      {staticLoading && stops.length === 0 && checklist.length > 0 && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-background/90 backdrop-blur-sm">
           <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
           <div className="space-y-2 min-w-[240px]">
             {checklist.map((item) => (
               <div key={item.id} className="flex items-center gap-2 text-sm">
                 {item.status === "done" ? (
-                  <Check className="h-4 w-4 text-green-500 shrink-0" />
+                  <Check className="h-4 w-4 text-primary shrink-0" />
                 ) : item.status === "loading" ? (
                   <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
                 ) : (
@@ -169,7 +169,7 @@ const Index = () => {
             ))}
           </div>
         </div>
-      ) : null}
+      )}
 
       {filteredStop && (
         <div className="absolute top-4 left-4 right-4 bg-background/95 backdrop-blur-sm rounded-lg px-4 py-3 shadow-lg flex items-center justify-between z-10 border">
