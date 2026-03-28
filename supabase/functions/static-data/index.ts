@@ -11,7 +11,17 @@ async function fetchAll(supabase: any, table: string) {
   const PAGE = 1000;
   let from = 0;
   while (true) {
-    const { data } = await supabase.from(table).select("*").range(from, from + PAGE - 1);
+    const { data, error } = await supabase
+      .from(table)
+      .select(
+        table === "transit_stops"
+          ? "stop_id, stop_name, stop_lat, stop_lon"
+          : table === "transit_routes"
+            ? "route_id, route_short_name"
+            : "stop_id, route_id"
+      )
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
     if (!data || data.length === 0) break;
     all.push(...data);
     if (data.length < PAGE) break;
@@ -54,15 +64,23 @@ serve(async (req) => {
     // Fetch only requested dataset
     const results: Record<string, any> = {};
 
-    if (dataset === "all" || dataset === "stops") {
-      results.stops = await fetchAll(supabase, "transit_stops");
-    }
-    if (dataset === "all" || dataset === "routes") {
-      results.routes = await fetchAll(supabase, "transit_routes");
-    }
-    if (dataset === "all" || dataset === "stopRoutes") {
-      results.stopRoutes = await fetchAll(supabase, "stop_routes");
-    }
+    await Promise.all([
+      (dataset === "all" || dataset === "stops")
+        ? fetchAll(supabase, "transit_stops").then((stops) => {
+            results.stops = stops;
+          })
+        : Promise.resolve(),
+      (dataset === "all" || dataset === "routes")
+        ? fetchAll(supabase, "transit_routes").then((routes) => {
+            results.routes = routes;
+          })
+        : Promise.resolve(),
+      (dataset === "all" || dataset === "stopRoutes")
+        ? fetchAll(supabase, "stop_routes").then((stopRoutes) => {
+            results.stopRoutes = stopRoutes;
+          })
+        : Promise.resolve(),
+    ]);
 
     // Get current hash from meta
     const { data: hashMeta } = await supabase

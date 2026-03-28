@@ -15,7 +15,7 @@ const RefreshTimer = ({ intervalMs, lastRefresh }: RefreshTimerProps) => {
       setProgress(Math.min(elapsed / intervalMs, 1));
     };
     tick();
-    const id = setInterval(tick, 200);
+    const id = setInterval(tick, 500);
     return () => clearInterval(id);
   }, [lastRefresh, intervalMs]);
 
@@ -44,7 +44,7 @@ const RefreshTimer = ({ intervalMs, lastRefresh }: RefreshTimerProps) => {
           strokeDasharray={circumference}
           strokeDashoffset={offset}
           strokeLinecap="round"
-          style={{ transition: "stroke-dashoffset 200ms linear" }}
+          style={{ transition: "stroke-dashoffset 500ms linear" }}
         />
       </svg>
       <Hourglass className="absolute h-3.5 w-3.5 text-muted-foreground" />

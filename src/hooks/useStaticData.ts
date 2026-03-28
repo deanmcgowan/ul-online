@@ -1,11 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import type { TransitStop } from "@/components/BusMap";
-
-const CACHE_KEY_STOPS = "cache_stops";
-const CACHE_KEY_ROUTES = "cache_routes";
-const CACHE_KEY_STOP_ROUTES = "cache_stopRoutes";
-const CACHE_KEY_HASH = "cache_hash";
+import { loadStaticDataSnapshot, saveStaticDataSnapshot } from "@/lib/staticDataCache";
 
 export interface ChecklistItem {
   id: string;
@@ -24,18 +20,6 @@ interface StaticData {
 /** Yield to browser so UI can repaint between heavy operations */
 function yieldToUI(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-/** Parse JSON off main thread via a short yield */
-async function parseCached<T>(key: string): Promise<T | null> {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    await yieldToUI();
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
 }
 
 export function useStaticData(): StaticData {
@@ -58,16 +42,16 @@ export function useStaticData(): StaticData {
     cancelledRef.current = false;
 
     async function load() {
-      const cachedHash = localStorage.getItem(CACHE_KEY_HASH) || "";
-      // Quick check if we have cached data keys at all (without parsing yet)
-      const hasCachedKeys = !!(
-        localStorage.getItem(CACHE_KEY_STOPS) &&
-        localStorage.getItem(CACHE_KEY_ROUTES) &&
-        localStorage.getItem(CACHE_KEY_STOP_ROUTES)
+      const cachedSnapshot = await loadStaticDataSnapshot();
+      const cachedHash = cachedSnapshot?.hash || "";
+      const hasCachedSnapshot = !!(
+        cachedSnapshot?.stops?.length &&
+        cachedSnapshot.routeMap &&
+        cachedSnapshot.stopRoutes
       );
 
       // Build checklist
-      const items: ChecklistItem[] = hasCachedKeys
+      const items: ChecklistItem[] = hasCachedSnapshot
         ? [
             { id: "cache", label: "Loading cached data", status: "pending" as const },
             { id: "check", label: "Checking for updates", status: "pending" as const },
@@ -80,24 +64,18 @@ export function useStaticData(): StaticData {
       setChecklist(items);
       await yieldToUI(); // Let checklist render
 
-      // 1) Load from cache with yields between each parse
-      if (hasCachedKeys) {
+      // 1) Load from cache
+      if (hasCachedSnapshot && cachedSnapshot) {
         updateItem("cache", "loading");
         await yieldToUI();
 
-        const cachedStops = await parseCached<TransitStop[]>(CACHE_KEY_STOPS);
-        if (cancelledRef.current) return;
-        if (cachedStops) setStops(cachedStops);
+        setStops(cachedSnapshot.stops);
         await yieldToUI();
 
-        const cachedRoutes = await parseCached<Record<string, string>>(CACHE_KEY_ROUTES);
-        if (cancelledRef.current) return;
-        if (cachedRoutes) setRouteMap(cachedRoutes);
+        setRouteMap(cachedSnapshot.routeMap);
         await yieldToUI();
 
-        const cachedStopRoutes = await parseCached<Record<string, string[]>>(CACHE_KEY_STOP_ROUTES);
-        if (cancelledRef.current) return;
-        if (cachedStopRoutes) setStopRoutes(cachedStopRoutes);
+        setStopRoutes(cachedSnapshot.stopRoutes);
 
         updateItem("cache", "done");
         setLoading(false);
@@ -106,7 +84,7 @@ export function useStaticData(): StaticData {
 
       // 2) Check server for updates
       try {
-        if (hasCachedKeys) {
+        if (hasCachedSnapshot) {
           updateItem("check", "loading");
         } else {
           updateItem("fetch", "loading");
@@ -120,54 +98,55 @@ export function useStaticData(): StaticData {
         if (error) throw error;
         if (cancelledRef.current) return;
 
-        if (data.unchanged && hasCachedKeys) {
+        if (data.unchanged && hasCachedSnapshot) {
           updateItem("check", "done", "Already up to date");
           setTimeout(() => { if (!cancelledRef.current) setChecklist([]); }, 1500);
           return;
         }
 
         // New data arrived — process it
-        if (!hasCachedKeys) {
+        if (!hasCachedSnapshot) {
           updateItem("fetch", "done");
           updateItem("process", "loading");
           await yieldToUI();
         }
 
+        const nextStops = (data.stops || []) as TransitStop[];
+        const nextRouteMap: Record<string, string> = {};
+        for (const route of data.routes || []) {
+          nextRouteMap[route.route_id] = route.route_short_name || route.route_id;
+        }
+
+        const nextStopRoutes: Record<string, string[]> = {};
+        for (const stopRoute of data.stopRoutes || []) {
+          if (!nextStopRoutes[stopRoute.stop_id]) nextStopRoutes[stopRoute.stop_id] = [];
+          nextStopRoutes[stopRoute.stop_id].push(stopRoute.route_id);
+        }
+
         if (data.stops) {
-          setStops(data.stops);
-          await yieldToUI();
-          localStorage.setItem(CACHE_KEY_STOPS, JSON.stringify(data.stops));
+          setStops(nextStops);
           await yieldToUI();
         }
 
         if (data.routes) {
-          const map: Record<string, string> = {};
-          for (const r of data.routes) {
-            map[r.route_id] = r.route_short_name || r.route_id;
-          }
-          setRouteMap(map);
-          await yieldToUI();
-          localStorage.setItem(CACHE_KEY_ROUTES, JSON.stringify(map));
+          setRouteMap(nextRouteMap);
           await yieldToUI();
         }
 
         if (data.stopRoutes) {
-          const map: Record<string, string[]> = {};
-          for (const sr of data.stopRoutes) {
-            if (!map[sr.stop_id]) map[sr.stop_id] = [];
-            map[sr.stop_id].push(sr.route_id);
-          }
-          setStopRoutes(map);
-          await yieldToUI();
-          localStorage.setItem(CACHE_KEY_STOP_ROUTES, JSON.stringify(map));
+          setStopRoutes(nextStopRoutes);
           await yieldToUI();
         }
 
-        if (data.hash) {
-          localStorage.setItem(CACHE_KEY_HASH, data.hash);
-        }
+        await saveStaticDataSnapshot({
+          hash: data.hash || cachedHash,
+          stops: nextStops,
+          routeMap: nextRouteMap,
+          stopRoutes: nextStopRoutes,
+          updatedAt: Date.now(),
+        });
 
-        if (hasCachedKeys) {
+        if (hasCachedSnapshot) {
           updateItem("check", "done", "Updated to latest data");
         } else {
           updateItem("process", "done");

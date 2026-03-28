@@ -5,29 +5,27 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { ArrowLeft, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import { useFavoriteStops } from "@/hooks/useFavoriteStops";
+import { loadPreferences, savePreferences } from "@/lib/preferences";
 
 const Settings = () => {
   const navigate = useNavigate();
   const { favorites, removeFavorite, reorderFavorites } = useFavoriteStops();
+  const [defaults] = useState(loadPreferences);
 
-  const [walkSpeed, setWalkSpeed] = useState(
-    parseFloat(localStorage.getItem("walkSpeed") || "4")
-  );
-  const [runSpeed, setRunSpeed] = useState(
-    parseFloat(localStorage.getItem("runSpeed") || "9")
-  );
-  const [bufferMinutes, setBufferMinutes] = useState(
-    parseFloat(localStorage.getItem("bufferMinutes") || "5")
-  );
-  const [showSkolskjuts, setShowSkolskjuts] = useState(
-    localStorage.getItem("showSkolskjuts") === "true"
-  );
+  const [walkSpeed, setWalkSpeed] = useState(defaults.walkSpeed);
+  const [runSpeed, setRunSpeed] = useState(defaults.runSpeed);
+  const [bufferMinutes, setBufferMinutes] = useState(defaults.bufferMinutes);
+  const [showSkolskjuts, setShowSkolskjuts] = useState(defaults.showSkolskjuts);
+  const [highAccuracyLocation, setHighAccuracyLocation] = useState(defaults.highAccuracyLocation);
 
   const handleSave = () => {
-    localStorage.setItem("walkSpeed", walkSpeed.toString());
-    localStorage.setItem("runSpeed", runSpeed.toString());
-    localStorage.setItem("bufferMinutes", bufferMinutes.toString());
-    localStorage.setItem("showSkolskjuts", showSkolskjuts.toString());
+    savePreferences({
+      walkSpeed,
+      runSpeed,
+      bufferMinutes,
+      showSkolskjuts,
+      highAccuracyLocation,
+    });
     navigate("/");
   };
 
@@ -119,6 +117,22 @@ const Settings = () => {
               id="skolskjuts"
               checked={showSkolskjuts}
               onCheckedChange={(checked) => setShowSkolskjuts(checked)}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <label htmlFor="high-accuracy-location" className="text-sm font-medium cursor-pointer">
+                High accuracy location
+              </label>
+              <p className="text-xs text-muted-foreground mt-1">
+                Uses more battery. Leave this off unless GPS precision is clearly needed.
+              </p>
+            </div>
+            <Switch
+              id="high-accuracy-location"
+              checked={highAccuracyLocation}
+              onCheckedChange={(checked) => setHighAccuracyLocation(checked)}
             />
           </div>
 

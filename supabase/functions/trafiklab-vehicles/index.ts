@@ -57,6 +57,8 @@ message VehicleDescriptor {
 `;
 
 let cachedRoot: protobuf.Root | null = null;
+const TRIP_ROUTE_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
+const tripRouteCache = new Map<string, { routeId: string; expiresAt: number }>();
 
 function getRoot() {
   if (!cachedRoot) {
@@ -65,12 +67,41 @@ function getRoot() {
   return cachedRoot;
 }
 
+function getCachedRouteId(tripId: string): string | null {
+  const cached = tripRouteCache.get(tripId);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    tripRouteCache.delete(tripId);
+    return null;
+  }
+  return cached.routeId;
+}
+
+function setCachedRouteId(tripId: string, routeId: string) {
+  tripRouteCache.set(tripId, {
+    routeId,
+    expiresAt: Date.now() + TRIP_ROUTE_CACHE_TTL_MS,
+  });
+}
+
+function pruneTripRouteCache() {
+  if (tripRouteCache.size < 5000) return;
+
+  const now = Date.now();
+  for (const [tripId, entry] of tripRouteCache.entries()) {
+    if (entry.expiresAt <= now) {
+      tripRouteCache.delete(tripId);
+    }
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    pruneTripRouteCache();
     const apiKey = Deno.env.get("TRAFIKLAB_GTFS_RT_KEY");
     if (!apiKey) {
       return new Response(JSON.stringify({ error: "API key not configured" }), {
@@ -123,7 +154,10 @@ serve(async (req) => {
 
     // Look up route_id from transit_trips for vehicles missing routeId
     const tripIdsToResolve = [...new Set(
-      vehicles.filter((v: any) => !v.routeId && v.tripId).map((v: any) => v.tripId)
+      vehicles
+        .filter((v: any) => !v.routeId && v.tripId)
+        .map((v: any) => v.tripId)
+        .filter((tripId: string) => !getCachedRouteId(tripId))
     )];
 
     if (tripIdsToResolve.length > 0) {
@@ -143,7 +177,10 @@ serve(async (req) => {
             .in("trip_id", batch);
           if (data) {
             data.forEach((row: any) => {
-              if (row.route_id) tripRouteMap.set(row.trip_id, row.route_id);
+              if (row.route_id) {
+                tripRouteMap.set(row.trip_id, row.route_id);
+                setCachedRouteId(row.trip_id, row.route_id);
+              }
             });
           }
         }
@@ -151,12 +188,18 @@ serve(async (req) => {
         // Fill in routeId from DB lookup
         vehicles.forEach((v: any) => {
           if (!v.routeId && v.tripId) {
-            v.routeId = tripRouteMap.get(v.tripId) || "";
+            v.routeId = tripRouteMap.get(v.tripId) || getCachedRouteId(v.tripId) || "";
           }
         });
       } catch (e) {
         console.error("Trip lookup error:", e.message);
       }
+    } else {
+      vehicles.forEach((v: any) => {
+        if (!v.routeId && v.tripId) {
+          v.routeId = getCachedRouteId(v.tripId) || "";
+        }
+      });
     }
 
     return new Response(

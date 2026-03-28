@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback, useMemo } from "react";
+import { useRef, useEffect, useState, useCallback, useMemo, lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import Map from "ol/Map";
 import View from "ol/View";
@@ -21,11 +21,31 @@ import Overlay from "ol/Overlay";
 import ClusterSource from "ol/source/Cluster";
 import { circular } from "ol/geom/Polygon";
 import { boundingExtent } from "ol/extent";
+import { fromLonLat, transformExtent } from "ol/proj";
 import { createBusCanvas, bearingTowardStop } from "@/lib/busIcon";
 import { Button } from "@/components/ui/button";
 import { Star } from "lucide-react";
-import BusPopup from "@/components/BusPopup";
 import "ol/ol.css";
+
+const BusPopup = lazy(() => import("@/components/BusPopup"));
+const VEHICLE_ICON_BUCKET = 15;
+
+function padExtent(extent: [number, number, number, number], factor: number): [number, number, number, number] {
+  const width = extent[2] - extent[0];
+  const height = extent[3] - extent[1];
+  const padX = width * factor;
+  const padY = height * factor;
+  return [extent[0] - padX, extent[1] - padY, extent[2] + padX, extent[3] + padY];
+}
+
+function stopIsInExtent(stop: TransitStop, extent: [number, number, number, number]): boolean {
+  return (
+    stop.stop_lon >= extent[0] &&
+    stop.stop_lon <= extent[2] &&
+    stop.stop_lat >= extent[1] &&
+    stop.stop_lat <= extent[3]
+  );
+}
 
 export interface Vehicle {
   id: string;
@@ -115,9 +135,12 @@ const BusMap = ({
   const stopsRawSourceRef = useRef(new VectorSource());
   const userSourceRef = useRef(new VectorSource());
   const bufferSourceRef = useRef(new VectorSource());
+  const vehicleFeaturesRef = useRef(new globalThis.Map<string, Feature<Point>>());
+  const vehicleStyleCacheRef = useRef(new globalThis.Map<string, Style>());
 
   const vehicleLayerRef = useRef<VectorLayer<any> | null>(null);
   const stopsLayerRef = useRef<VectorLayer<ClusterSource> | null>(null);
+  const [stopViewportVersion, setStopViewportVersion] = useState(0);
 
   const [popup, setPopup] = useState<{
     type: "stop" | "bus";
@@ -129,6 +152,41 @@ const BusMap = ({
     const filtered = showSkolskjuts ? stops : stops.filter((s) => !isSkolskjuts(s.stop_name));
     return deduplicateStops(filtered);
   }, [stops, showSkolskjuts]);
+
+  const visibleStops = useMemo(() => {
+    const map = mapRef.current;
+    const size = map?.getSize();
+
+    if (!map || !size) {
+      return processedStops;
+    }
+
+    const projectedExtent = map.getView().calculateExtent(size);
+    const geographicExtent = transformExtent(projectedExtent, "EPSG:3857", "EPSG:4326") as [number, number, number, number];
+    const paddedExtent = padExtent(geographicExtent, 0.25);
+
+    return processedStops.filter((stop) => stopIsInExtent(stop, paddedExtent));
+  }, [processedStops, stopViewportVersion]);
+
+  const getVehicleStyle = useCallback((lineNumber: string, bearing: number, isToward?: boolean) => {
+    const bearingBucket = ((Math.round(bearing / VEHICLE_ICON_BUCKET) * VEHICLE_ICON_BUCKET) % 360 + 360) % 360;
+    const styleKey = `${lineNumber}|${bearingBucket}|${isToward ?? "unknown"}`;
+    const cached = vehicleStyleCacheRef.current.get(styleKey);
+    if (cached) {
+      return { style: cached, styleKey };
+    }
+
+    const style = new Style({
+      image: new Icon({
+        img: createBusCanvas(lineNumber, bearingBucket, isToward),
+        size: [64, 64],
+        anchor: [0.5, 0.5],
+      }),
+    });
+
+    vehicleStyleCacheRef.current.set(styleKey, style);
+    return { style, styleKey };
+  }, []);
 
   // Map initialization
   useEffect(() => {
@@ -235,6 +293,7 @@ const BusMap = ({
     });
     mapRef.current = map;
     onMapReady?.(map);
+    setStopViewportVersion((value) => value + 1);
 
     map.on("singleclick", (e) => {
       let handled = false;
@@ -304,10 +363,14 @@ const BusMap = ({
       }
     });
 
+    const handleMoveEnd = () => setStopViewportVersion((value) => value + 1);
+    map.on("moveend", handleMoveEnd);
+
     return () => {
       if (stopRenderFrameRef.current !== null) {
         cancelAnimationFrame(stopRenderFrameRef.current);
       }
+      map.un("moveend", handleMoveEnd);
       map.setTarget(undefined);
     };
   }, []);
@@ -315,9 +378,10 @@ const BusMap = ({
   // Update vehicles
   useEffect(() => {
     const source = vehicleSourceRef.current;
-    source.clear(true);
+    const featureMap = vehicleFeaturesRef.current;
+    const nextIds = new Set<string>();
 
-    const features = vehicles.map((v) => {
+    vehicles.forEach((v) => {
       const lineNumber = routeMap[v.routeId] || v.vehicleLabel || "?";
 
       let isToward: boolean | undefined;
@@ -331,31 +395,49 @@ const BusMap = ({
         );
       }
 
-      const canvas = createBusCanvas(lineNumber, v.bearing, isToward);
-      const feature = new Feature({
-        geometry: new Point(fromLonLat([v.lon, v.lat])),
-        featureType: "vehicle",
-        lineNumber,
-        ...v,
-      });
+      const coordinate = fromLonLat([v.lon, v.lat]);
+      let feature = featureMap.get(v.id);
 
-      feature.setStyle(
-        new Style({
-          image: new Icon({
-            img: canvas,
-            size: [64, 64],
-            anchor: [0.5, 0.5],
-          }),
-        })
+      if (!feature) {
+        feature = new Feature({
+          geometry: new Point(coordinate),
+        });
+        featureMap.set(v.id, feature);
+        source.addFeature(feature);
+      } else {
+        const geometry = feature.getGeometry();
+        if (geometry) {
+          geometry.setCoordinates(coordinate);
+        } else {
+          feature.setGeometry(new Point(coordinate));
+        }
+      }
+
+      feature.setProperties(
+        {
+          featureType: "vehicle",
+          lineNumber,
+          ...v,
+        },
+        true
       );
 
-      return feature;
+      const { style, styleKey } = getVehicleStyle(lineNumber, v.bearing, isToward);
+      if (feature.get("styleKey") !== styleKey) {
+        feature.set("styleKey", styleKey, true);
+        feature.setStyle(style);
+      }
+
+      nextIds.add(v.id);
     });
 
-    if (features.length > 0) {
-      source.addFeatures(features);
+    for (const [vehicleId, feature] of featureMap.entries()) {
+      if (!nextIds.has(vehicleId)) {
+        source.removeFeature(feature);
+        featureMap.delete(vehicleId);
+      }
     }
-  }, [vehicles, routeMap, filteredStop]);
+  }, [vehicles, routeMap, filteredStop, getVehicleStyle]);
 
   // Update stops in chunks to avoid blocking main thread
   useEffect(() => {
@@ -369,23 +451,23 @@ const BusMap = ({
 
     source.clear(true);
 
-    if (processedStops.length === 0) {
+    if (visibleStops.length === 0) {
       return () => {
         stopRenderTokenRef.current++;
       };
     }
 
-    const CHUNK = 250;
+    const CHUNK = 120;
     let i = 0;
 
     function addChunk() {
       if (stopRenderTokenRef.current !== renderToken) return;
 
-      const end = Math.min(i + CHUNK, processedStops.length);
+      const end = Math.min(i + CHUNK, visibleStops.length);
       const features: Feature[] = [];
 
       for (; i < end; i++) {
-        const s = processedStops[i];
+        const s = visibleStops[i];
         features.push(new Feature({
           geometry: new Point(fromLonLat([s.stop_lon, s.stop_lat])),
           featureType: "stop",
@@ -397,7 +479,7 @@ const BusMap = ({
         source.addFeatures(features);
       }
 
-      if (i < processedStops.length) {
+      if (i < visibleStops.length) {
         stopRenderFrameRef.current = requestAnimationFrame(addChunk);
       } else {
         stopRenderFrameRef.current = null;
@@ -413,7 +495,7 @@ const BusMap = ({
         stopRenderFrameRef.current = null;
       }
     };
-  }, [processedStops]);
+  }, [visibleStops]);
 
   // Update user location + buffers
   useEffect(() => {
@@ -503,12 +585,14 @@ const BusMap = ({
           </div>
         </div>
       ) : (
-        <BusPopup
-          vehicle={popup.data as Vehicle & { lineNumber: string }}
-          userLocation={userLocation}
-          walkSpeed={walkSpeed}
-          runSpeed={runSpeed}
-        />
+        <Suspense fallback={<div className="text-xs text-muted-foreground">Loading bus details...</div>}>
+          <BusPopup
+            vehicle={popup.data as Vehicle & { lineNumber: string }}
+            userLocation={userLocation}
+            walkSpeed={walkSpeed}
+            runSpeed={runSpeed}
+          />
+        </Suspense>
       )}
       <button
         className="absolute top-1 right-2 text-muted-foreground hover:text-foreground text-lg leading-none"

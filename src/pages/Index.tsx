@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import BusMap, { Vehicle, TransitStop } from "@/components/BusMap";
 import { supabase } from "@/integrations/supabase/client";
@@ -9,11 +9,29 @@ import { useFavoriteStops } from "@/hooks/useFavoriteStops";
 import { useStaticData } from "@/hooks/useStaticData";
 import Map from "ol/Map";
 import { fromLonLat } from "ol/proj";
+import { loadPreferences } from "@/lib/preferences";
+
+const DEFAULT_VEHICLE_REFRESH_MS = 10000;
+const SLOW_VEHICLE_REFRESH_MS = 20000;
+const OFFLINE_REFRESH_MS = 30000;
+
+function getVehicleRefreshDelay(): number {
+  const connection = (navigator as Navigator & {
+    connection?: { saveData?: boolean; effectiveType?: string };
+  }).connection;
+
+  if (connection?.saveData || connection?.effectiveType === "2g") {
+    return SLOW_VEHICLE_REFRESH_MS;
+  }
+
+  return DEFAULT_VEHICLE_REFRESH_MS;
+}
 
 const Index = () => {
   const navigate = useNavigate();
   const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteStops();
   const { stops, routeMap, stopRoutes, loading: staticLoading, checklist } = useStaticData();
+  const [preferences] = useState(loadPreferences);
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
@@ -22,11 +40,51 @@ const Index = () => {
   const [lastRefresh, setLastRefresh] = useState(Date.now());
   const [mapInstance, setMapInstance] = useState<Map | null>(null);
   const [showFavorites, setShowFavorites] = useState(false);
+  const watchIdRef = useRef<number | null>(null);
+  const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "ready" | "denied" | "unsupported">("idle");
 
-  const walkSpeed = parseFloat(localStorage.getItem("walkSpeed") || "4");
-  const runSpeed = parseFloat(localStorage.getItem("runSpeed") || "9");
-  const bufferMinutes = parseFloat(localStorage.getItem("bufferMinutes") || "5");
-  const showSkolskjuts = localStorage.getItem("showSkolskjuts") === "true";
+  const { walkSpeed, runSpeed, bufferMinutes, showSkolskjuts, highAccuracyLocation } = preferences;
+
+  const stopLocationTracking = useCallback(() => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+  }, []);
+
+  const startLocationTracking = useCallback(() => {
+    if (!navigator.geolocation) {
+      setLocationStatus("unsupported");
+      return;
+    }
+
+    if (watchIdRef.current !== null) {
+      return;
+    }
+
+    setLocationStatus("requesting");
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        setUserLocation([pos.coords.longitude, pos.coords.latitude]);
+        setLocationStatus("ready");
+      },
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) {
+          setLocationStatus("denied");
+          stopLocationTracking();
+          return;
+        }
+
+        console.warn("Geolocation error:", err);
+        setLocationStatus("idle");
+      },
+      {
+        enableHighAccuracy: highAccuracyLocation,
+        maximumAge: highAccuracyLocation ? 10000 : 30000,
+        timeout: 20000,
+      }
+    );
+  }, [highAccuracyLocation, stopLocationTracking]);
 
   useEffect(() => {
     const handler = () => setIsVisible(!document.hidden);
@@ -36,30 +94,77 @@ const Index = () => {
 
   useEffect(() => {
     if (!isVisible) return;
-    const fetchVehicles = async () => {
+    let cancelled = false;
+    let timerId: number | null = null;
+
+    const scheduleNextRun = (delay: number) => {
+      if (!cancelled) {
+        timerId = window.setTimeout(runFetch, delay);
+      }
+    };
+
+    const runFetch = async () => {
+      if (cancelled) return;
+
+      if (!navigator.onLine) {
+        scheduleNextRun(OFFLINE_REFRESH_MS);
+        return;
+      }
+
       try {
         const { data, error } = await supabase.functions.invoke("trafiklab-vehicles");
         if (error) throw error;
         if (data?.vehicles) setVehicles(data.vehicles);
         setLastRefresh(Date.now());
+        scheduleNextRun(getVehicleRefreshDelay());
       } catch (err: any) {
         console.error("Vehicle fetch error:", err);
+        scheduleNextRun(OFFLINE_REFRESH_MS);
       }
     };
-    fetchVehicles();
-    const interval = setInterval(fetchVehicles, 10000);
-    return () => clearInterval(interval);
+
+    runFetch();
+
+    return () => {
+      cancelled = true;
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+    };
   }, [isVisible]);
 
   useEffect(() => {
-    if (!navigator.geolocation) return;
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => setUserLocation([pos.coords.longitude, pos.coords.latitude]),
-      (err) => console.warn("Geolocation error:", err),
-      { enableHighAccuracy: true, maximumAge: 10000 }
-    );
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
+    if (!("permissions" in navigator)) {
+      return;
+    }
+
+    let cancelled = false;
+
+    navigator.permissions
+      .query({ name: "geolocation" })
+      .then((status) => {
+        if (cancelled) return;
+        if (status.state === "granted") {
+          startLocationTracking();
+          return;
+        }
+
+        if (status.state === "denied") {
+          setLocationStatus("denied");
+        }
+      })
+      .catch(() => {
+        // Safari may not expose permission status consistently.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [startLocationTracking]);
+
+  useEffect(() => {
+    return () => stopLocationTracking();
+  }, [stopLocationTracking]);
 
   const handleStopClick = useCallback((stop: TransitStop) => {
     setFilteredStop(stop);
@@ -71,14 +176,19 @@ const Index = () => {
   }, []);
 
   const handleLocate = useCallback(() => {
-    if (userLocation && mapInstance) {
+    if (!userLocation) {
+      startLocationTracking();
+      return;
+    }
+
+    if (mapInstance) {
       mapInstance.getView().animate({
         center: fromLonLat(userLocation),
         zoom: 15,
         duration: 500,
       });
     }
-  }, [userLocation, mapInstance]);
+  }, [userLocation, mapInstance, startLocationTracking]);
 
   const handleToggleFavorite = useCallback(
     (stop: TransitStop) => {
@@ -122,15 +232,17 @@ const Index = () => {
     return routes;
   }, [stops, stopRoutes]);
 
-  const filteredVehicles = filteredStop
-    ? (() => {
+  const filteredVehicles = useMemo(() => {
+    if (!filteredStop) {
+      return vehicles;
+    }
+
         const allowedRoutes = getRoutesForStop(filteredStop);
         if (allowedRoutes.size > 0) {
           return vehicles.filter((v) => allowedRoutes.has(v.routeId));
         }
         return vehicles;
-      })()
-    : vehicles;
+  }, [filteredStop, getRoutesForStop, vehicles]);
 
   return (
     <div className="relative h-[100dvh] w-screen overflow-hidden">
@@ -236,9 +348,8 @@ const Index = () => {
           size="icon"
           className="rounded-full shadow-lg h-11 w-11"
           onClick={handleLocate}
-          disabled={!userLocation}
         >
-          <Locate className="h-5 w-5" />
+          <Locate className={`h-5 w-5 ${locationStatus === "requesting" ? "animate-pulse" : ""}`} />
         </Button>
       </div>
     </div>
