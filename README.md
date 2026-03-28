@@ -104,6 +104,100 @@ Start the development server:
 npm run dev
 ```
 
+## VS Code test and debug setup
+
+This repository now includes ready-to-use VS Code workspace files in `.vscode/`.
+
+Recommended extensions:
+
+- Playwright Test
+- Vitest Explorer
+- Docker
+- ESLint
+
+### Local app debugging
+
+Use the Run and Debug panel and start one of these profiles:
+
+- `Frontend: Chrome`
+- `Frontend: Edge`
+
+Both profiles start the Vite dev server automatically and attach the browser debugger to `http://localhost:8080`.
+
+### Unit tests
+
+You can run tests from either the Testing panel or the terminal tasks:
+
+```bash
+npm run test
+npm run test:watch
+```
+
+The `Vitest: current file` launch profile is set up for stepping through the currently open test file.
+
+### Playwright
+
+Playwright is configured to run against a local Vite server on port `4173`.
+
+Run it with:
+
+```bash
+npx playwright test
+```
+
+The `Playwright: current file` launch profile runs the currently open spec in headed Chromium for debugging.
+
+Add future end-to-end specs under `e2e/`.
+
+### VS Code tasks
+
+The workspace also provides tasks for:
+
+- installing dependencies
+- starting the dev server
+- building the app
+- previewing the production build
+- running Vitest
+- running Playwright
+- building and running the Docker image
+
+Open the Command Palette and run `Tasks: Run Task` to access them.
+
+## Docker
+
+The repository now includes:
+
+- `Dockerfile` for a multi-stage frontend build
+- `compose.yml` for local container runs
+- `docker/nginx.conf` for SPA routing and cache headers
+
+### Build the image
+
+Vite needs the frontend environment variables at build time, so pass them as build args:
+
+```bash
+docker build \
+	--build-arg VITE_SUPABASE_URL=your_supabase_url \
+	--build-arg VITE_SUPABASE_PUBLISHABLE_KEY=your_supabase_publishable_key \
+	-t ul-online:local .
+```
+
+### Run the container
+
+```bash
+docker run --rm -p 8080:80 ul-online:local
+```
+
+### Run with Compose
+
+Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in your shell or compose environment file, then run:
+
+```bash
+docker compose up --build
+```
+
+The container serves the built frontend through nginx on port `8080`.
+
 ## Available scripts
 
 ```bash
