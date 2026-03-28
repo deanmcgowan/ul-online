@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { ArrowLeft, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import { useFavoriteStops } from "@/hooks/useFavoriteStops";
 
@@ -111,15 +111,15 @@ const Settings = () => {
           </div>
 
           {/* Skolskjuts toggle */}
-          <div className="flex items-center gap-3">
-            <Checkbox
-              id="skolskjuts"
-              checked={showSkolskjuts}
-              onCheckedChange={(checked) => setShowSkolskjuts(checked === true)}
-            />
+          <div className="flex items-center justify-between">
             <label htmlFor="skolskjuts" className="text-sm font-medium cursor-pointer">
               Show skolskjuts bus stops
             </label>
+            <Switch
+              id="skolskjuts"
+              checked={showSkolskjuts}
+              onCheckedChange={(checked) => setShowSkolskjuts(checked)}
+            />
           </div>
 
           {/* Favourite stops management */}
