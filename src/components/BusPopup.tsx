@@ -1,4 +1,5 @@
 import type { Vehicle } from "@/components/BusMap";
+import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 
 interface BusPopupProps {
   vehicle: Vehicle & { lineNumber: string };
@@ -35,6 +36,7 @@ const BusPopup = ({
   walkSpeed,
   runSpeed,
 }: BusPopupProps) => {
+  const { strings } = useAppPreferences();
   const distToVehicle = userLocation
     ? haversineDistance(userLocation[1], userLocation[0], vehicle.lat, vehicle.lon)
     : null;
@@ -44,7 +46,7 @@ const BusPopup = ({
 
   return (
     <div>
-      <h3 className="font-semibold text-sm">Line {vehicle.lineNumber}</h3>
+      <h3 className="font-semibold text-sm">{strings.line} {vehicle.lineNumber}</h3>
       <p className="text-xs text-muted-foreground mt-1">
         {((vehicle.speed || 0) * 3.6).toFixed(0)} km/h · {(vehicle.bearing || 0).toFixed(0)}°
       </p>
@@ -52,7 +54,7 @@ const BusPopup = ({
       {distToVehicle !== null && walkTimeMin !== null && runTimeMin !== null && (
         <div className="mt-2 pt-2 border-t text-xs">
           <p className="font-medium mb-0.5">
-            Distance: {distToVehicle < 1000
+            {strings.distance}: {distToVehicle < 1000
               ? `${Math.round(distToVehicle)} m`
               : `${(distToVehicle / 1000).toFixed(1)} km`}
           </p>

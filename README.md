@@ -80,6 +80,13 @@ VITE_SUPABASE_URL=your_supabase_url
 VITE_SUPABASE_PUBLISHABLE_KEY=your_supabase_publishable_key
 ```
 
+These two frontend values are public by design. In a browser app they cannot be hidden, and that is normal for Supabase.
+
+- `VITE_SUPABASE_URL` is your public project URL
+- `VITE_SUPABASE_PUBLISHABLE_KEY` is your public anon/publishable key
+
+Do **not** put private API keys, service role keys, or third-party secrets in `VITE_` variables. Anything prefixed with `VITE_` is bundled into the frontend and visible to users.
+
 ### Supabase Edge Function secrets
 
 Your Edge Functions will also need server-side secrets configured for:
@@ -87,8 +94,18 @@ Your Edge Functions will also need server-side secrets configured for:
 ```bash
 TRAFIKLAB_GTFS_RT_KEY=your_realtime_api_key
 TRAFIKLAB_GTFS_REGIONAL_STATIC_KEY=your_static_api_key
+TRAFIKVERKET_OPEN_DATA_API_KEY=your_trafikverket_open_data_api_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 ```
+
+This is the secure, industry-standard place for your private credentials in this project. Keep third-party API keys and the Supabase service role key in Supabase Edge Function secrets, then call those providers only from Edge Functions.
+
+Recommended split for this app:
+
+- Frontend `.env`: `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`
+- Supabase Edge Function secrets: `TRAFIKLAB_GTFS_RT_KEY`, `TRAFIKLAB_GTFS_REGIONAL_STATIC_KEY`, `TRAFIKVERKET_OPEN_DATA_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
+
+The repository now ignores local `.env` files, so your machine-specific values stay out of git.
 
 ## Install and run
 
@@ -107,6 +124,8 @@ npm run dev
 ## VS Code test and debug setup
 
 This repository now includes ready-to-use VS Code workspace files in `.vscode/`.
+
+Copy `.env.example` to a local environment file and fill in your Supabase values before running the app.
 
 Recommended extensions:
 

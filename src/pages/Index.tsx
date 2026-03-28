@@ -1,49 +1,139 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import BusMap, { Vehicle, TransitStop } from "@/components/BusMap";
+import CommuteDashboard from "@/components/CommuteDashboard";
+import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
+import { useCommutePlans, getTrafficQueryForPlan } from "@/hooks/useCommutePlans";
+import { useRoadSituations } from "@/hooks/useRoadSituations";
+import { useToast } from "@/hooks/use-toast";
 import { Settings, X, Locate, Star, Loader2, Check, Circle } from "lucide-react";
 import RefreshTimer from "@/components/RefreshTimer";
 import { useFavoriteStops } from "@/hooks/useFavoriteStops";
+import { useSavedPlaces } from "@/hooks/useSavedPlaces";
 import { useStaticData } from "@/hooks/useStaticData";
 import Map from "ol/Map";
-import { fromLonLat } from "ol/proj";
-import { loadPreferences } from "@/lib/preferences";
+import { fromLonLat, toLonLat } from "ol/proj";
 
-const DEFAULT_VEHICLE_REFRESH_MS = 10000;
-const SLOW_VEHICLE_REFRESH_MS = 20000;
-const OFFLINE_REFRESH_MS = 30000;
+const ACTIVE_VEHICLE_REFRESH_MS = 10000;
+const DEFAULT_TRAFFIC_RADIUS_METERS = 5000;
 
-function getVehicleRefreshDelay(): number {
-  const connection = (navigator as Navigator & {
-    connection?: { saveData?: boolean; effectiveType?: string };
-  }).connection;
-
-  if (connection?.saveData || connection?.effectiveType === "2g") {
-    return SLOW_VEHICLE_REFRESH_MS;
+function isSameTrafficQuery(
+  left: { lat: number; lon: number; radiusMeters: number; limit: number } | null,
+  right: { lat: number; lon: number; radiusMeters: number; limit: number } | null,
+) {
+  if (!left || !right) {
+    return left === right;
   }
 
-  return DEFAULT_VEHICLE_REFRESH_MS;
+  return (
+    left.lat === right.lat &&
+    left.lon === right.lon &&
+    left.radiusMeters === right.radiusMeters &&
+    left.limit === right.limit
+  );
+}
+
+function haversineDistanceMeters(fromLat: number, fromLon: number, toLat: number, toLon: number): number {
+  const earthRadius = 6371000;
+  const dLat = ((toLat - fromLat) * Math.PI) / 180;
+  const dLon = ((toLon - fromLon) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((fromLat * Math.PI) / 180) *
+      Math.cos((toLat * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+
+  return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getTrafficQueryFromMap(map: Map) {
+  const view = map.getView();
+  const center = view.getCenter();
+  const size = map.getSize();
+
+  if (!center || !size) {
+    return null;
+  }
+
+  const [centerLon, centerLat] = toLonLat(center);
+  const extent = view.calculateExtent(size);
+  const [edgeLon, edgeLat] = toLonLat([extent[2], extent[3]]);
+  const radiusMeters = Math.min(
+    12000,
+    Math.max(2500, Math.round(haversineDistanceMeters(centerLat, centerLon, edgeLat, edgeLon))),
+  );
+
+  return {
+    lat: Number(centerLat.toFixed(6)),
+    lon: Number(centerLon.toFixed(6)),
+    radiusMeters,
+    limit: 8,
+  };
+}
+
+function getInitialAppActiveState(): boolean {
+  return document.visibilityState === "visible" && document.hasFocus();
 }
 
 const Index = () => {
   const navigate = useNavigate();
+  const { preferences, resolvedLanguage, strings } = useAppPreferences();
+  const { toast } = useToast();
   const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteStops();
+  const { savedPlaces } = useSavedPlaces();
   const { stops, routeMap, stopRoutes, loading: staticLoading, checklist } = useStaticData();
-  const [preferences] = useState(loadPreferences);
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [filteredStop, setFilteredStop] = useState<TransitStop | null>(null);
-  const [isVisible, setIsVisible] = useState(true);
+  const [isPageVisible, setIsPageVisible] = useState(() => document.visibilityState === "visible");
+  const [isWindowFocused, setIsWindowFocused] = useState(getInitialAppActiveState);
   const [lastRefresh, setLastRefresh] = useState(Date.now());
   const [mapInstance, setMapInstance] = useState<Map | null>(null);
+  const [trafficQuery, setTrafficQuery] = useState({
+    lat: 59.8586,
+    lon: 17.6389,
+    radiusMeters: DEFAULT_TRAFFIC_RADIUS_METERS,
+    limit: 8,
+  });
   const [showFavorites, setShowFavorites] = useState(false);
+  const [activeCommutePlanId, setActiveCommutePlanId] = useState<string | null>(null);
+  const [highlightedCommuteStop, setHighlightedCommuteStop] = useState<TransitStop | null>(null);
   const watchIdRef = useRef<number | null>(null);
+  const [shouldTrackLocation, setShouldTrackLocation] = useState(false);
   const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "ready" | "denied" | "unsupported">("idle");
+  const isAppActive = isPageVisible && isWindowFocused;
 
-  const { walkSpeed, runSpeed, bufferMinutes, showSkolskjuts, highAccuracyLocation } = preferences;
+  const {
+    walkSpeed,
+    runSpeed,
+    bufferMinutes,
+    maxWalkDistanceMeters,
+    showSkolskjuts,
+    highAccuracyLocation,
+    stopVisibilityZoom,
+  } = preferences;
+  const { situations: roadSituations } = useRoadSituations(trafficQuery, isAppActive);
+  const { plans: commutePlans, loading: commuteLoading } = useCommutePlans({
+    savedPlaces,
+    userLocation,
+    stops,
+    stopRoutes,
+    routeMap,
+    vehicles,
+    walkSpeed,
+    bufferMinutes,
+    maxWalkDistanceMeters,
+    roadSituations,
+  });
+  const likelyPlan = useMemo(
+    () => commutePlans.find((plan) => plan.activeOrigin && plan.bestOption) ?? commutePlans.find((plan) => plan.bestOption) ?? null,
+    [commutePlans],
+  );
+  const likelyCommuteQuery = useMemo(() => getTrafficQueryForPlan(likelyPlan), [likelyPlan]);
+  const hasEnoughPlaces = savedPlaces.length >= 2;
 
   const stopLocationTracking = useCallback(() => {
     if (watchIdRef.current !== null) {
@@ -58,7 +148,7 @@ const Index = () => {
       return;
     }
 
-    if (watchIdRef.current !== null) {
+    if (!isAppActive || watchIdRef.current !== null) {
       return;
     }
 
@@ -84,16 +174,38 @@ const Index = () => {
         timeout: 20000,
       }
     );
-  }, [highAccuracyLocation, stopLocationTracking]);
+  }, [highAccuracyLocation, isAppActive, stopLocationTracking]);
 
   useEffect(() => {
-    const handler = () => setIsVisible(!document.hidden);
-    document.addEventListener("visibilitychange", handler);
-    return () => document.removeEventListener("visibilitychange", handler);
+    const handleVisibilityChange = () => setIsPageVisible(document.visibilityState === "visible");
+    const handleFocus = () => setIsWindowFocused(true);
+    const handleBlur = () => setIsWindowFocused(false);
+    const handlePageHide = () => {
+      setIsPageVisible(false);
+      setIsWindowFocused(false);
+    };
+    const handlePageShow = () => {
+      setIsPageVisible(document.visibilityState === "visible");
+      setIsWindowFocused(document.hasFocus());
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("blur", handleBlur);
+    window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("pageshow", handlePageShow);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
   }, []);
 
   useEffect(() => {
-    if (!isVisible) return;
+    if (!isAppActive) return;
     let cancelled = false;
     let timerId: number | null = null;
 
@@ -107,7 +219,7 @@ const Index = () => {
       if (cancelled) return;
 
       if (!navigator.onLine) {
-        scheduleNextRun(OFFLINE_REFRESH_MS);
+        scheduleNextRun(ACTIVE_VEHICLE_REFRESH_MS);
         return;
       }
 
@@ -116,10 +228,10 @@ const Index = () => {
         if (error) throw error;
         if (data?.vehicles) setVehicles(data.vehicles);
         setLastRefresh(Date.now());
-        scheduleNextRun(getVehicleRefreshDelay());
-      } catch (err: any) {
-        console.error("Vehicle fetch error:", err);
-        scheduleNextRun(OFFLINE_REFRESH_MS);
+        scheduleNextRun(ACTIVE_VEHICLE_REFRESH_MS);
+      } catch (error) {
+        console.error("Vehicle fetch error:", error);
+        scheduleNextRun(ACTIVE_VEHICLE_REFRESH_MS);
       }
     };
 
@@ -131,7 +243,7 @@ const Index = () => {
         window.clearTimeout(timerId);
       }
     };
-  }, [isVisible]);
+  }, [isAppActive]);
 
   useEffect(() => {
     if (!("permissions" in navigator)) {
@@ -145,12 +257,13 @@ const Index = () => {
       .then((status) => {
         if (cancelled) return;
         if (status.state === "granted") {
-          startLocationTracking();
+          setShouldTrackLocation(true);
           return;
         }
 
         if (status.state === "denied") {
           setLocationStatus("denied");
+          setShouldTrackLocation(false);
         }
       })
       .catch(() => {
@@ -160,24 +273,72 @@ const Index = () => {
     return () => {
       cancelled = true;
     };
-  }, [startLocationTracking]);
+  }, []);
 
   useEffect(() => {
     return () => stopLocationTracking();
   }, [stopLocationTracking]);
 
+  useEffect(() => {
+    if (likelyCommuteQuery) {
+      setTrafficQuery((current) => (isSameTrafficQuery(current, likelyCommuteQuery) ? current : likelyCommuteQuery));
+      return;
+    }
+
+    if (mapInstance) {
+      const updateTrafficQuery = () => {
+        const nextQuery = getTrafficQueryFromMap(mapInstance);
+        if (nextQuery) {
+          setTrafficQuery((current) => (isSameTrafficQuery(current, nextQuery) ? current : nextQuery));
+        }
+      };
+
+      updateTrafficQuery();
+      mapInstance.on("moveend", updateTrafficQuery);
+
+      return () => {
+        mapInstance.un("moveend", updateTrafficQuery);
+      };
+    }
+
+    if (userLocation) {
+      const nextQuery = {
+        lat: Number(userLocation[1].toFixed(6)),
+        lon: Number(userLocation[0].toFixed(6)),
+        radiusMeters: DEFAULT_TRAFFIC_RADIUS_METERS,
+        limit: 8,
+      };
+      setTrafficQuery((current) => (isSameTrafficQuery(current, nextQuery) ? current : nextQuery));
+    }
+  }, [likelyCommuteQuery, mapInstance, userLocation]);
+
+  useEffect(() => {
+    if (!shouldTrackLocation || !isAppActive) {
+      stopLocationTracking();
+      return;
+    }
+
+    startLocationTracking();
+
+    return () => stopLocationTracking();
+  }, [isAppActive, shouldTrackLocation, startLocationTracking, stopLocationTracking]);
+
   const handleStopClick = useCallback((stop: TransitStop) => {
     setFilteredStop(stop);
+    setHighlightedCommuteStop(null);
     setShowFavorites(false);
   }, []);
 
   const handleClearFilter = useCallback(() => {
     setFilteredStop(null);
+    setHighlightedCommuteStop(null);
+    setActiveCommutePlanId(null);
   }, []);
 
   const handleLocate = useCallback(() => {
+    setShouldTrackLocation(true);
+
     if (!userLocation) {
-      startLocationTracking();
       return;
     }
 
@@ -188,7 +349,7 @@ const Index = () => {
         duration: 500,
       });
     }
-  }, [userLocation, mapInstance, startLocationTracking]);
+  }, [userLocation, mapInstance]);
 
   const handleToggleFavorite = useCallback(
     (stop: TransitStop) => {
@@ -203,15 +364,29 @@ const Index = () => {
 
   const handleFavoriteSelect = useCallback((stop: TransitStop) => {
     setFilteredStop(stop);
+    setHighlightedCommuteStop(null);
+    setActiveCommutePlanId(null);
     setShowFavorites(false);
-    if (mapInstance) {
-      mapInstance.getView().animate({
-        center: fromLonLat([stop.stop_lon, stop.stop_lat]),
-        zoom: 15,
-        duration: 500,
-      });
+  }, []);
+
+  const handleCommutePlanSelect = useCallback((plan: Parameters<NonNullable<React.ComponentProps<typeof CommuteDashboard>["onSelectPlan"]>>[0]) => {
+    if (!plan.bestOption) {
+      return;
     }
-  }, [mapInstance]);
+
+    setActiveCommutePlanId(plan.id);
+    setFilteredStop(plan.bestOption.originStop);
+    setHighlightedCommuteStop({ ...plan.bestOption.originStop });
+    setShowFavorites(false);
+
+    toast({
+      title: strings.commuteSelectionToastTitle,
+      description: strings.commuteSelectionToastDescription(
+        plan.bestOption.originStop.stop_name,
+        plan.bestOption.lineNumber,
+      ),
+    });
+  }, [strings, toast]);
 
   // Collect all route_ids for a stop AND its nearby siblings (~300m)
   const getRoutesForStop = useCallback((stop: TransitStop): Set<string> => {
@@ -237,11 +412,12 @@ const Index = () => {
       return vehicles;
     }
 
-        const allowedRoutes = getRoutesForStop(filteredStop);
-        if (allowedRoutes.size > 0) {
-          return vehicles.filter((v) => allowedRoutes.has(v.routeId));
-        }
-        return vehicles;
+    const allowedRoutes = getRoutesForStop(filteredStop);
+    if (allowedRoutes.size > 0) {
+      return vehicles.filter((v) => allowedRoutes.has(v.routeId));
+    }
+
+    return vehicles;
   }, [filteredStop, getRoutesForStop, vehicles]);
 
   return (
@@ -261,6 +437,9 @@ const Index = () => {
         isFavorite={isFavorite}
         onToggleFavorite={handleToggleFavorite}
         showSkolskjuts={showSkolskjuts}
+        stopVisibilityZoom={stopVisibilityZoom}
+        stopRoutes={stopRoutes}
+        highlightedStop={highlightedCommuteStop}
       />
 
       {staticLoading && stops.length === 0 && checklist.length > 0 && (
@@ -288,7 +467,7 @@ const Index = () => {
       {filteredStop && (
         <div className="absolute top-4 left-4 right-4 bg-background/95 backdrop-blur-sm rounded-lg px-4 py-3 shadow-lg flex items-center justify-between z-10 border">
           <div>
-            <p className="text-xs text-muted-foreground">Filtering by stop</p>
+            <p className="text-xs text-muted-foreground">{strings.filteringByStop}</p>
             <p className="text-sm font-semibold">{filteredStop.stop_name}</p>
           </div>
           <Button variant="ghost" size="icon" onClick={handleClearFilter}>
@@ -297,11 +476,21 @@ const Index = () => {
         </div>
       )}
 
+      <CommuteDashboard
+        plans={commutePlans}
+        loading={commuteLoading}
+        hasEnoughPlaces={hasEnoughPlaces}
+        onOpenSettings={() => navigate("/settings")}
+        onSelectPlan={handleCommutePlanSelect}
+        activePlanId={activeCommutePlanId}
+        offsetTopClassName={filteredStop ? "top-24" : "top-4"}
+      />
+
       {/* Favorites panel */}
       {showFavorites && favorites.length > 0 && (
-        <div className="absolute top-4 left-4 right-4 bg-background/95 backdrop-blur-sm rounded-lg shadow-lg z-10 border max-h-[50vh] overflow-y-auto">
+        <div className={`absolute left-4 z-10 w-[min(19rem,calc(100vw-6rem))] rounded-lg border bg-background/95 shadow-lg backdrop-blur-sm max-h-[50vh] overflow-y-auto ${filteredStop ? "top-24" : "top-4"}`}>
           <div className="flex items-center justify-between px-4 py-2 border-b">
-            <p className="text-sm font-semibold">Favorite Stops</p>
+            <p className="text-sm font-semibold">{strings.favouriteStops}</p>
             <Button variant="ghost" size="icon" onClick={() => setShowFavorites(false)}>
               <X className="h-4 w-4" />
             </Button>
@@ -321,7 +510,7 @@ const Index = () => {
       )}
 
       <div className="absolute bottom-6 left-4 z-10">
-        <RefreshTimer intervalMs={10000} lastRefresh={lastRefresh} />
+        <RefreshTimer intervalMs={ACTIVE_VEHICLE_REFRESH_MS} lastRefresh={lastRefresh} isActive={isAppActive} />
       </div>
 
       <div className="absolute bottom-6 right-4 flex flex-col gap-2 z-10">
@@ -330,6 +519,7 @@ const Index = () => {
             variant="secondary"
             size="icon"
             className="rounded-full shadow-lg h-11 w-11"
+            aria-label={strings.showFavouriteStops}
             onClick={() => setShowFavorites(!showFavorites)}
           >
             <Star className="h-5 w-5" />
@@ -339,6 +529,7 @@ const Index = () => {
           variant="secondary"
           size="icon"
           className="rounded-full shadow-lg h-11 w-11"
+          aria-label={strings.openSettings}
           onClick={() => navigate("/settings")}
         >
           <Settings className="h-5 w-5" />
@@ -347,6 +538,7 @@ const Index = () => {
           variant="secondary"
           size="icon"
           className="rounded-full shadow-lg h-11 w-11"
+          aria-label={strings.centerOnMyLocation}
           onClick={handleLocate}
         >
           <Locate className={`h-5 w-5 ${locationStatus === "requesting" ? "animate-pulse" : ""}`} />

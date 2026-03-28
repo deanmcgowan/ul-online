@@ -8,7 +8,7 @@ import VectorSource from "ol/source/Vector";
 import OSM from "ol/source/OSM";
 import Feature from "ol/Feature";
 import Point from "ol/geom/Point";
-import { fromLonLat } from "ol/proj";
+import { fromLonLat, transformExtent } from "ol/proj";
 import {
   Style,
   Fill,
@@ -21,14 +21,17 @@ import Overlay from "ol/Overlay";
 import ClusterSource from "ol/source/Cluster";
 import { circular } from "ol/geom/Polygon";
 import { boundingExtent } from "ol/extent";
-import { fromLonLat, transformExtent } from "ol/proj";
 import { createBusCanvas, bearingTowardStop } from "@/lib/busIcon";
 import { Button } from "@/components/ui/button";
-import { Star } from "lucide-react";
+import { useAppPreferences } from "@/contexts/AppPreferencesContext";
+import StopPopup from "@/components/StopPopup";
 import "ol/ol.css";
 
 const BusPopup = lazy(() => import("@/components/BusPopup"));
 const VEHICLE_ICON_BUCKET = 15;
+const STOP_CLUSTER_DISTANCE = 50;
+const STOP_CLUSTER_MIN_DISTANCE = 25;
+const CLUSTER_SPLIT_PIXEL_BUFFER = 8;
 
 function padExtent(extent: [number, number, number, number], factor: number): [number, number, number, number] {
   const width = extent[2] - extent[0];
@@ -47,11 +50,58 @@ function stopIsInExtent(stop: TransitStop, extent: [number, number, number, numb
   );
 }
 
+function getClusterSplitZoom(features: Feature[], view: View): number | null {
+  const currentZoom = view.getZoom();
+  if (currentZoom === undefined) {
+    return null;
+  }
+
+  const coordinates = features.map((feature) =>
+    (feature.getGeometry() as Point).getCoordinates()
+  );
+
+  if (coordinates.length < 2) {
+    return Math.min(view.getMaxZoom() ?? 20, currentZoom + 1);
+  }
+
+  let minimumPairDistance = Number.POSITIVE_INFINITY;
+
+  for (let index = 0; index < coordinates.length - 1; index += 1) {
+    const [leftX, leftY] = coordinates[index];
+
+    for (let compareIndex = index + 1; compareIndex < coordinates.length; compareIndex += 1) {
+      const [rightX, rightY] = coordinates[compareIndex];
+      const distance = Math.hypot(rightX - leftX, rightY - leftY);
+
+      if (distance > 0) {
+        minimumPairDistance = Math.min(minimumPairDistance, distance);
+      }
+    }
+  }
+
+  if (!Number.isFinite(minimumPairDistance)) {
+    return view.getMaxZoom() ?? 20;
+  }
+
+  const targetResolution = minimumPairDistance / (STOP_CLUSTER_DISTANCE + CLUSTER_SPLIT_PIXEL_BUFFER);
+  const targetZoom = view.getZoomForResolution(targetResolution);
+
+  if (!Number.isFinite(targetZoom)) {
+    return view.getMaxZoom() ?? 20;
+  }
+
+  return Math.min(
+    view.getMaxZoom() ?? 20,
+    Math.max(currentZoom + 1, targetZoom + 0.5),
+  );
+}
+
 export interface Vehicle {
   id: string;
   tripId: string;
   routeId: string;
   directionId: number;
+  currentStatus: "INCOMING_AT" | "STOPPED_AT" | "IN_TRANSIT_TO" | "";
   lat: number;
   lon: number;
   bearing: number;
@@ -85,6 +135,9 @@ interface BusMapProps {
   isFavorite?: (stopId: string) => boolean;
   onToggleFavorite?: (stop: TransitStop) => void;
   showSkolskjuts?: boolean;
+  stopVisibilityZoom?: number;
+  stopRoutes?: Record<string, string[]>;
+  highlightedStop?: TransitStop | null;
 }
 
 /** Deduplicate stops using a grid-based O(n) approach. ~50m threshold. */
@@ -119,7 +172,11 @@ const BusMap = ({
   isFavorite,
   onToggleFavorite,
   showSkolskjuts = false,
+  stopVisibilityZoom = 14,
+  stopRoutes = {},
+  highlightedStop = null,
 }: BusMapProps) => {
+  const { strings } = useAppPreferences();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<Map | null>(null);
   const overlayRef = useRef<Overlay | null>(null);
@@ -158,7 +215,12 @@ const BusMap = ({
     const size = map?.getSize();
 
     if (!map || !size) {
-      return processedStops;
+      return [];
+    }
+
+    const currentZoom = map.getView().getZoom() ?? 0;
+    if (currentZoom < stopVisibilityZoom) {
+      return [];
     }
 
     const projectedExtent = map.getView().calculateExtent(size);
@@ -166,7 +228,7 @@ const BusMap = ({
     const paddedExtent = padExtent(geographicExtent, 0.25);
 
     return processedStops.filter((stop) => stopIsInExtent(stop, paddedExtent));
-  }, [processedStops, stopViewportVersion]);
+  }, [processedStops, stopViewportVersion, stopVisibilityZoom]);
 
   const getVehicleStyle = useCallback((lineNumber: string, bearing: number, isToward?: boolean) => {
     const bearingBucket = ((Math.round(bearing / VEHICLE_ICON_BUCKET) * VEHICLE_ICON_BUCKET) % 360 + 360) % 360;
@@ -193,8 +255,8 @@ const BusMap = ({
     if (!mapContainerRef.current) return;
 
     const stopsCluster = new ClusterSource({
-      distance: 50,
-      minDistance: 25,
+      distance: STOP_CLUSTER_DISTANCE,
+      minDistance: STOP_CLUSTER_MIN_DISTANCE,
       source: stopsRawSourceRef.current,
     });
 
@@ -336,12 +398,16 @@ const BusMap = ({
             const features = feature.get("features");
             if (features) {
               if (features.length > 1) {
-                const extent = boundingExtent(
-                  features.map((f: Feature) =>
-                    (f.getGeometry() as Point).getCoordinates()
-                  )
-                );
-                map.getView().fit(extent, { padding: [80, 80, 80, 80], duration: 300 });
+                const targetZoom = getClusterSplitZoom(features as Feature[], map.getView());
+
+                if (targetZoom !== null) {
+                  map.getView().animate({
+                    center: e.coordinate,
+                    zoom: targetZoom,
+                    duration: 300,
+                  });
+                }
+
                 handled = true;
               } else {
                 const stopFeature = features[0];
@@ -552,40 +618,40 @@ const BusMap = ({
     bufferSourceRef.current.addFeature(runFeature);
   }, [userLocation, walkSpeed, runSpeed, bufferMinutes]);
 
+  useEffect(() => {
+    if (!highlightedStop || !mapRef.current || !overlayRef.current) {
+      return;
+    }
+
+    const coordinate = fromLonLat([highlightedStop.stop_lon, highlightedStop.stop_lat]);
+    setPopup({ type: "stop", data: highlightedStop });
+    overlayRef.current.setPosition(coordinate);
+    mapRef.current.getView().animate({
+      center: coordinate,
+      zoom: Math.max(mapRef.current.getView().getZoom() ?? 13, 15),
+      duration: 400,
+    });
+  }, [highlightedStop]);
+
   const popupContent = popup ? (
     <div className="bg-background rounded-lg shadow-lg border p-3 min-w-[200px] max-w-[280px] relative">
       {popup.type === "stop" ? (
-        <div>
-          <h3 className="font-semibold text-sm">{popup.data.stop_name}</h3>
-          <div className="flex gap-2 mt-2">
-            <Button
-              size="sm"
-              className="flex-1"
-              onClick={() => {
-                onStopClick(popup.data as TransitStop);
-                setPopup(null);
-                overlayRef.current?.setPosition(undefined);
-              }}
-            >
-              Filter buses
-            </Button>
-            {onToggleFavorite && (
-              <Button
-                size="sm"
-                variant={isFavorite?.(popup.data.stop_id) ? "default" : "outline"}
-                onClick={() => {
-                  onToggleFavorite(popup.data as TransitStop);
-                }}
-              >
-                <Star
-                  className={`h-4 w-4 ${isFavorite?.(popup.data.stop_id) ? "fill-current" : ""}`}
-                />
-              </Button>
-            )}
-          </div>
-        </div>
+        <StopPopup
+          stop={popup.data as TransitStop}
+          stops={stops}
+          vehicles={vehicles}
+          routeMap={routeMap}
+          stopRoutes={stopRoutes}
+          isFavorite={isFavorite}
+          onToggleFavorite={onToggleFavorite}
+          onFilter={(selectedStop) => {
+            onStopClick(selectedStop);
+            setPopup(null);
+            overlayRef.current?.setPosition(undefined);
+          }}
+        />
       ) : (
-        <Suspense fallback={<div className="text-xs text-muted-foreground">Loading bus details...</div>}>
+        <Suspense fallback={<div className="text-xs text-muted-foreground">{strings.loadingBusDetails}</div>}>
           <BusPopup
             vehicle={popup.data as Vehicle & { lineNumber: string }}
             userLocation={userLocation}

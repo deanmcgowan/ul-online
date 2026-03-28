@@ -1,186 +1,308 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import SavedPlacesManager from "@/components/SavedPlacesManager";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { ArrowLeft, Trash2, ChevronUp, ChevronDown } from "lucide-react";
+import { ArrowLeft, Trash2, ChevronUp, ChevronDown, Globe2, MapPinned, Route } from "lucide-react";
 import { useFavoriteStops } from "@/hooks/useFavoriteStops";
-import { loadPreferences, savePreferences } from "@/lib/preferences";
+import { useAppPreferences } from "@/contexts/AppPreferencesContext";
+import { getStrings, resolveAppLanguage } from "@/lib/i18n";
+import type { AppPreferences, LanguagePreference } from "@/lib/preferences";
 
 const Settings = () => {
   const navigate = useNavigate();
+  const { preferences, updatePreferences } = useAppPreferences();
   const { favorites, removeFavorite, reorderFavorites } = useFavoriteStops();
-  const [defaults] = useState(loadPreferences);
+  const [draft, setDraft] = useState(preferences);
 
-  const [walkSpeed, setWalkSpeed] = useState(defaults.walkSpeed);
-  const [runSpeed, setRunSpeed] = useState(defaults.runSpeed);
-  const [bufferMinutes, setBufferMinutes] = useState(defaults.bufferMinutes);
-  const [showSkolskjuts, setShowSkolskjuts] = useState(defaults.showSkolskjuts);
-  const [highAccuracyLocation, setHighAccuracyLocation] = useState(defaults.highAccuracyLocation);
+  const strings = useMemo(
+    () => getStrings(resolveAppLanguage(draft.language)),
+    [draft.language],
+  );
+
+  const systemLanguageLabel = resolveAppLanguage("system") === "sv-SE"
+    ? strings.swedish
+    : strings.britishEnglish;
+
+  const updateDraft = <K extends keyof AppPreferences>(key: K, value: AppPreferences[K]) => {
+    setDraft((current) => ({ ...current, [key]: value }));
+  };
 
   const handleSave = () => {
-    savePreferences({
-      walkSpeed,
-      runSpeed,
-      bufferMinutes,
-      showSkolskjuts,
-      highAccuracyLocation,
-    });
+    updatePreferences(draft);
     navigate("/");
   };
 
-  const walkRadius = ((walkSpeed / 3.6) * bufferMinutes * 60).toFixed(0);
-  const runRadius = ((runSpeed / 3.6) * bufferMinutes * 60).toFixed(0);
+  const walkRadius = ((draft.walkSpeed / 3.6) * draft.bufferMinutes * 60).toFixed(0);
+  const runRadius = ((draft.runSpeed / 3.6) * draft.bufferMinutes * 60).toFixed(0);
+  const maxWalkDistanceLabel = draft.maxWalkDistanceMeters >= 1000
+    ? `${(draft.maxWalkDistanceMeters / 1000).toFixed(1)} km`
+    : `${draft.maxWalkDistanceMeters} m`;
+
+  const languageOptions: Array<{ value: LanguagePreference; label: string }> = [
+    { value: "system", label: `${strings.systemDefault} (${systemLanguageLabel})` },
+    { value: "en-GB", label: strings.britishEnglish },
+    { value: "sv-SE", label: strings.swedish },
+  ];
 
   return (
-    <div className="min-h-[100dvh] bg-background">
-      <div className="max-w-md mx-auto px-6 py-4">
+    <div className="min-h-[100dvh] bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.12),transparent_35%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)/0.55))]">
+      <div className="mx-auto max-w-3xl px-4 py-4 sm:px-6 sm:py-6">
         <Button
           variant="ghost"
           size="sm"
           onClick={() => navigate("/")}
-          className="mb-6 -ml-2"
+          className="mb-4 -ml-2"
         >
           <ArrowLeft className="h-4 w-4 mr-1" />
-          Back to map
+          {strings.backToMap}
         </Button>
 
-        <h1 className="text-2xl font-bold tracking-tight mb-8">Settings</h1>
-
-        <div className="space-y-10">
-          {/* Buffer time first — it controls what the circles mean */}
+        <div className="mb-6 flex items-start justify-between gap-4">
           <div>
-            <div className="flex items-baseline justify-between mb-3">
-              <label className="text-sm font-medium">Buffer time</label>
-              <span className="text-sm text-muted-foreground tabular-nums">
-                {bufferMinutes} min
-              </span>
-            </div>
-            <Slider
-              value={[bufferMinutes]}
-              onValueChange={([v]) => setBufferMinutes(v)}
-              min={1}
-              max={15}
-              step={1}
-            />
-            <p className="text-xs text-muted-foreground mt-2">
-              The circles on the map show the distance you can cover in this time.
+            <h1 className="text-3xl font-bold tracking-tight">{strings.settings}</h1>
+            <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+              {strings.settingsDescription}
             </p>
           </div>
+        </div>
 
-          <div>
-            <div className="flex items-baseline justify-between mb-3">
-              <label className="text-sm font-medium">Walk speed</label>
-              <span className="text-sm text-muted-foreground tabular-nums">
-                {walkSpeed} km/h → {walkRadius} m in {bufferMinutes} min
-              </span>
-            </div>
-            <Slider
-              value={[walkSpeed]}
-              onValueChange={([v]) => setWalkSpeed(v)}
-              min={1}
-              max={10}
-              step={0.5}
-            />
-            <div className="flex justify-between text-xs text-muted-foreground mt-1">
-              <span>1 km/h</span>
-              <span>10 km/h</span>
-            </div>
-          </div>
+        <Tabs defaultValue="journey" className="space-y-4">
+          <TabsList className="grid h-auto w-full grid-cols-3 gap-1 rounded-xl bg-background/80 p-1 backdrop-blur-sm">
+            <TabsTrigger value="journey" className="gap-2 py-2.5">
+              <Route className="h-4 w-4" />
+              {strings.journeyTab}
+            </TabsTrigger>
+            <TabsTrigger value="map" className="gap-2 py-2.5">
+              <MapPinned className="h-4 w-4" />
+              {strings.mapTab}
+            </TabsTrigger>
+            <TabsTrigger value="app" className="gap-2 py-2.5">
+              <Globe2 className="h-4 w-4" />
+              {strings.appTab}
+            </TabsTrigger>
+          </TabsList>
 
-          <div>
-            <div className="flex items-baseline justify-between mb-3">
-              <label className="text-sm font-medium">Run speed</label>
-              <span className="text-sm text-muted-foreground tabular-nums">
-                {runSpeed} km/h → {runRadius} m in {bufferMinutes} min
-              </span>
-            </div>
-            <Slider
-              value={[runSpeed]}
-              onValueChange={([v]) => setRunSpeed(v)}
-              min={3}
-              max={20}
-              step={0.5}
-            />
-            <div className="flex justify-between text-xs text-muted-foreground mt-1">
-              <span>3 km/h</span>
-              <span>20 km/h</span>
-            </div>
-          </div>
-
-          {/* Skolskjuts toggle */}
-          <div className="flex items-center justify-between">
-            <label htmlFor="skolskjuts" className="text-sm font-medium cursor-pointer">
-              Show skolskjuts bus stops
-            </label>
-            <Switch
-              id="skolskjuts"
-              checked={showSkolskjuts}
-              onCheckedChange={(checked) => setShowSkolskjuts(checked)}
-            />
-          </div>
-
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <label htmlFor="high-accuracy-location" className="text-sm font-medium cursor-pointer">
-                High accuracy location
-              </label>
-              <p className="text-xs text-muted-foreground mt-1">
-                Uses more battery. Leave this off unless GPS precision is clearly needed.
-              </p>
-            </div>
-            <Switch
-              id="high-accuracy-location"
-              checked={highAccuracyLocation}
-              onCheckedChange={(checked) => setHighAccuracyLocation(checked)}
-            />
-          </div>
-
-          {/* Favourite stops management */}
-          {favorites.length > 0 && (
-            <div>
-              <label className="text-sm font-medium block mb-3">Favorite Stops</label>
-              <div className="border rounded-lg divide-y">
-                {favorites.map((fav, i) => (
-                  <div key={fav.stop_id} className="flex items-center px-3 py-2.5 gap-2">
-                    <span className="text-sm flex-1 truncate">{fav.stop_name}</span>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        disabled={i === 0}
-                        onClick={() => reorderFavorites(i, i - 1)}
-                      >
-                        <ChevronUp className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        disabled={i === favorites.length - 1}
-                        onClick={() => reorderFavorites(i, i + 1)}
-                      >
-                        <ChevronDown className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-destructive"
-                        onClick={() => removeFavorite(fav.stop_id)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
+          <TabsContent value="journey">
+            <Card className="border-white/50 bg-background/90 backdrop-blur-sm">
+              <CardHeader>
+                <CardTitle>{strings.journeyCardTitle}</CardTitle>
+                <CardDescription>{strings.journeyCardDescription}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-8">
+                <div>
+                  <div className="mb-3 flex items-baseline justify-between">
+                    <label className="text-sm font-medium">{strings.bufferTime}</label>
+                    <span className="text-sm text-muted-foreground tabular-nums">
+                      {draft.bufferMinutes} min
+                    </span>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                  <Slider
+                    value={[draft.bufferMinutes]}
+                    onValueChange={([value]) => updateDraft("bufferMinutes", value)}
+                    min={1}
+                    max={15}
+                    step={1}
+                  />
+                  <p className="mt-2 text-xs text-muted-foreground">{strings.bufferTimeHint}</p>
+                </div>
 
-          <Button onClick={handleSave} className="w-full mt-4">
-            Save & return to map
-          </Button>
+                <div>
+                  <div className="mb-3 flex items-baseline justify-between">
+                    <label className="text-sm font-medium">{strings.walkSpeed}</label>
+                    <span className="text-sm text-muted-foreground tabular-nums">
+                      {draft.walkSpeed} km/h → {walkRadius} m in {draft.bufferMinutes} min
+                    </span>
+                  </div>
+                  <Slider
+                    value={[draft.walkSpeed]}
+                    onValueChange={([value]) => updateDraft("walkSpeed", value)}
+                    min={1}
+                    max={10}
+                    step={0.5}
+                  />
+                </div>
+
+                <div>
+                  <div className="mb-3 flex items-baseline justify-between">
+                    <label className="text-sm font-medium">{strings.maxWalkDistance}</label>
+                    <span className="text-sm text-muted-foreground tabular-nums">
+                      {maxWalkDistanceLabel}
+                    </span>
+                  </div>
+                  <Slider
+                    value={[draft.maxWalkDistanceMeters]}
+                    onValueChange={([value]) => updateDraft("maxWalkDistanceMeters", value)}
+                    min={200}
+                    max={2000}
+                    step={100}
+                  />
+                  <p className="mt-2 text-xs text-muted-foreground">{strings.maxWalkDistanceHint}</p>
+                </div>
+
+                <div>
+                  <div className="mb-3 flex items-baseline justify-between">
+                    <label className="text-sm font-medium">{strings.runSpeed}</label>
+                    <span className="text-sm text-muted-foreground tabular-nums">
+                      {draft.runSpeed} km/h → {runRadius} m in {draft.bufferMinutes} min
+                    </span>
+                  </div>
+                  <Slider
+                    value={[draft.runSpeed]}
+                    onValueChange={([value]) => updateDraft("runSpeed", value)}
+                    min={3}
+                    max={20}
+                    step={0.5}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="map">
+            <Card className="border-white/50 bg-background/90 backdrop-blur-sm">
+              <CardHeader>
+                <CardTitle>{strings.mapCardTitle}</CardTitle>
+                <CardDescription>{strings.mapCardDescription}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-8">
+                <div>
+                  <div className="mb-3 flex items-baseline justify-between">
+                    <label className="text-sm font-medium">{strings.stopVisibilityZoom}</label>
+                    <span className="text-sm text-muted-foreground tabular-nums">
+                      {strings.stopVisibilityValue} {draft.stopVisibilityZoom}
+                    </span>
+                  </div>
+                  <Slider
+                    value={[draft.stopVisibilityZoom]}
+                    onValueChange={([value]) => updateDraft("stopVisibilityZoom", value)}
+                    min={10}
+                    max={17}
+                    step={1}
+                  />
+                  <p className="mt-2 text-xs text-muted-foreground">{strings.stopVisibilityHint}</p>
+                </div>
+
+                <div className="flex items-start justify-between gap-4 rounded-xl border bg-muted/30 p-4">
+                  <div>
+                    <label htmlFor="skolskjuts" className="text-sm font-medium cursor-pointer">
+                      {strings.showSkolskjuts}
+                    </label>
+                  </div>
+                  <Switch
+                    id="skolskjuts"
+                    checked={draft.showSkolskjuts}
+                    onCheckedChange={(checked) => updateDraft("showSkolskjuts", checked)}
+                  />
+                </div>
+
+                <div className="flex items-start justify-between gap-4 rounded-xl border bg-muted/30 p-4">
+                  <div>
+                    <label htmlFor="high-accuracy-location" className="text-sm font-medium cursor-pointer">
+                      {strings.highAccuracyLocation}
+                    </label>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {strings.highAccuracyHint}
+                    </p>
+                  </div>
+                  <Switch
+                    id="high-accuracy-location"
+                    checked={draft.highAccuracyLocation}
+                    onCheckedChange={(checked) => updateDraft("highAccuracyLocation", checked)}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="app">
+            <Card className="border-white/50 bg-background/90 backdrop-blur-sm">
+              <CardHeader>
+                <CardTitle>{strings.appCardTitle}</CardTitle>
+                <CardDescription>{strings.appCardDescription}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-8">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">{strings.language}</label>
+                  <Select
+                    value={draft.language}
+                    onValueChange={(value) => updateDraft("language", value as LanguagePreference)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={strings.language} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {languageOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{strings.languageHint}</p>
+                </div>
+
+                <SavedPlacesManager />
+
+                <div>
+                  <label className="mb-3 block text-sm font-medium">{strings.favouriteStops}</label>
+                  {favorites.length > 0 ? (
+                    <div className="overflow-hidden rounded-xl border bg-muted/20">
+                      {favorites.map((fav, index) => (
+                        <div key={fav.stop_id} className="flex items-center gap-2 border-b px-3 py-2.5 last:border-b-0">
+                          <span className="min-w-0 flex-1 truncate text-sm">{fav.stop_name}</span>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              disabled={index === 0}
+                              onClick={() => reorderFavorites(index, index - 1)}
+                            >
+                              <ChevronUp className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              disabled={index === favorites.length - 1}
+                              onClick={() => reorderFavorites(index, index + 1)}
+                            >
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-destructive"
+                              onClick={() => removeFavorite(fav.stop_id)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed bg-muted/20 px-4 py-6 text-sm text-muted-foreground">
+                      {strings.noFavouriteStops}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+
+        <div className="sticky bottom-0 mt-6 pb-4 pt-4">
+          <div className="rounded-2xl border bg-background/90 p-3 shadow-lg backdrop-blur-sm">
+            <Button onClick={handleSave} className="h-11 w-full">
+              {strings.saveAndReturn}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

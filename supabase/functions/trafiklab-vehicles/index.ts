@@ -59,6 +59,11 @@ message VehicleDescriptor {
 let cachedRoot: protobuf.Root | null = null;
 const TRIP_ROUTE_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
 const tripRouteCache = new Map<string, { routeId: string; expiresAt: number }>();
+const VEHICLE_STOP_STATUS: Record<number, "INCOMING_AT" | "STOPPED_AT" | "IN_TRANSIT_TO"> = {
+  0: "INCOMING_AT",
+  1: "STOPPED_AT",
+  2: "IN_TRANSIT_TO",
+};
 
 function getRoot() {
   if (!cachedRoot) {
@@ -141,6 +146,7 @@ serve(async (req) => {
         tripId: e.vehicle.trip?.tripId || "",
         routeId: e.vehicle.trip?.routeId || "",
         directionId: e.vehicle.trip?.directionId || 0,
+        currentStatus: VEHICLE_STOP_STATUS[e.vehicle.currentStatus] || "",
         lat: e.vehicle.position.latitude,
         lon: e.vehicle.position.longitude,
         bearing: e.vehicle.position.bearing || 0,

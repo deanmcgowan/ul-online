@@ -4,9 +4,10 @@ import { Hourglass } from "lucide-react";
 interface RefreshTimerProps {
   intervalMs: number;
   lastRefresh: number;
+  isActive?: boolean;
 }
 
-const RefreshTimer = ({ intervalMs, lastRefresh }: RefreshTimerProps) => {
+const RefreshTimer = ({ intervalMs, lastRefresh, isActive = true }: RefreshTimerProps) => {
   const [progress, setProgress] = useState(0);
 
   useEffect(() => {
@@ -14,10 +15,16 @@ const RefreshTimer = ({ intervalMs, lastRefresh }: RefreshTimerProps) => {
       const elapsed = Date.now() - lastRefresh;
       setProgress(Math.min(elapsed / intervalMs, 1));
     };
+
     tick();
+
+    if (!isActive) {
+      return;
+    }
+
     const id = setInterval(tick, 500);
     return () => clearInterval(id);
-  }, [lastRefresh, intervalMs]);
+  }, [isActive, lastRefresh, intervalMs]);
 
   const radius = 14;
   const circumference = 2 * Math.PI * radius;

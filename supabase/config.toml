@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.trafiklab-import]
 verify_jwt = false
+
+[functions.trafikverket-situations]
+verify_jwt = false

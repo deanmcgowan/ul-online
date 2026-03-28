@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { supabase } from "@/integrations/supabase/client";
 import type { TransitStop } from "@/components/BusMap";
 import { loadStaticDataSnapshot, saveStaticDataSnapshot } from "@/lib/staticDataCache";
@@ -23,6 +24,7 @@ function yieldToUI(): Promise<void> {
 }
 
 export function useStaticData(): StaticData {
+  const { strings } = useAppPreferences();
   const [stops, setStops] = useState<TransitStop[]>([]);
   const [routeMap, setRouteMap] = useState<Record<string, string>>({});
   const [stopRoutes, setStopRoutes] = useState<Record<string, string[]>>({});
@@ -53,12 +55,12 @@ export function useStaticData(): StaticData {
       // Build checklist
       const items: ChecklistItem[] = hasCachedSnapshot
         ? [
-            { id: "cache", label: "Loading cached data", status: "pending" as const },
-            { id: "check", label: "Checking for updates", status: "pending" as const },
+            { id: "cache", label: strings.loadingCachedData, status: "pending" as const },
+            { id: "check", label: strings.checkingForUpdates, status: "pending" as const },
           ]
         : [
-            { id: "fetch", label: "Downloading data (one-off)", status: "pending" as const },
-            { id: "process", label: "Processing data", status: "pending" as const },
+            { id: "fetch", label: strings.downloadingData, status: "pending" as const },
+            { id: "process", label: strings.processingData, status: "pending" as const },
           ];
 
       setChecklist(items);
@@ -99,7 +101,7 @@ export function useStaticData(): StaticData {
         if (cancelledRef.current) return;
 
         if (data.unchanged && hasCachedSnapshot) {
-          updateItem("check", "done", "Already up to date");
+          updateItem("check", "done", strings.upToDate);
           setTimeout(() => { if (!cancelledRef.current) setChecklist([]); }, 1500);
           return;
         }
@@ -147,18 +149,20 @@ export function useStaticData(): StaticData {
         });
 
         if (hasCachedSnapshot) {
-          updateItem("check", "done", "Updated to latest data");
+          updateItem("check", "done", strings.updatedToLatest);
         } else {
           updateItem("process", "done");
         }
       } catch (err) {
         console.error("Static data fetch error:", err);
-        if (hasCachedKeys) {
-          updateItem("check", "done", "Update check failed (using cached data)");
+        if (hasCachedSnapshot) {
+          updateItem("check", "done", strings.updateCheckFailed);
         } else {
           setChecklist((prev) =>
             prev.map((item) =>
-              item.status === "loading" ? { ...item, status: "done", label: item.label + " (failed)" } : item
+              item.status === "loading"
+                ? { ...item, status: "done", label: `${item.label} (${strings.processingFailedSuffix})` }
+                : item
             )
           );
         }
@@ -172,7 +176,7 @@ export function useStaticData(): StaticData {
 
     load();
     return () => { cancelledRef.current = true; };
-  }, []);
+  }, [strings]);
 
   return { stops, routeMap, stopRoutes, loading, checklist };
 }
