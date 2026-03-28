@@ -26,6 +26,7 @@ const Index = () => {
   const walkSpeed = parseFloat(localStorage.getItem("walkSpeed") || "4");
   const runSpeed = parseFloat(localStorage.getItem("runSpeed") || "9");
   const bufferMinutes = parseFloat(localStorage.getItem("bufferMinutes") || "5");
+  const showSkolskjuts = localStorage.getItem("showSkolskjuts") === "true";
 
   useEffect(() => {
     const handler = () => setIsVisible(!document.hidden);
@@ -147,6 +148,7 @@ const Index = () => {
         onMapReady={setMapInstance}
         isFavorite={isFavorite}
         onToggleFavorite={handleToggleFavorite}
+        showSkolskjuts={showSkolskjuts}
       />
 
       {staticLoading && stops.length === 0 && checklist.length > 0 && (
