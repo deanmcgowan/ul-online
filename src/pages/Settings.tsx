@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ArrowLeft, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import { useFavoriteStops } from "@/hooks/useFavoriteStops";
 
@@ -18,11 +19,15 @@ const Settings = () => {
   const [bufferMinutes, setBufferMinutes] = useState(
     parseFloat(localStorage.getItem("bufferMinutes") || "5")
   );
+  const [showSkolskjuts, setShowSkolskjuts] = useState(
+    localStorage.getItem("showSkolskjuts") === "true"
+  );
 
   const handleSave = () => {
     localStorage.setItem("walkSpeed", walkSpeed.toString());
     localStorage.setItem("runSpeed", runSpeed.toString());
     localStorage.setItem("bufferMinutes", bufferMinutes.toString());
+    localStorage.setItem("showSkolskjuts", showSkolskjuts.toString());
     navigate("/");
   };
 
@@ -105,7 +110,19 @@ const Settings = () => {
             </div>
           </div>
 
-          {/* Favorite stops management */}
+          {/* Skolskjuts toggle */}
+          <div className="flex items-center gap-3">
+            <Checkbox
+              id="skolskjuts"
+              checked={showSkolskjuts}
+              onCheckedChange={(checked) => setShowSkolskjuts(checked === true)}
+            />
+            <label htmlFor="skolskjuts" className="text-sm font-medium cursor-pointer">
+              Show skolskjuts bus stops
+            </label>
+          </div>
+
+          {/* Favourite stops management */}
           {favorites.length > 0 && (
             <div>
               <label className="text-sm font-medium block mb-3">Favorite Stops</label>

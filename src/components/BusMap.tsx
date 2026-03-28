@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import Map from "ol/Map";
 import View from "ol/View";
@@ -64,6 +64,7 @@ interface BusMapProps {
   onMapReady?: (map: Map) => void;
   isFavorite?: (stopId: string) => boolean;
   onToggleFavorite?: (stop: TransitStop) => void;
+  showSkolskjuts?: boolean;
 }
 
 /** Deduplicate stops using a grid-based O(n) approach. ~50m threshold. */
@@ -75,6 +76,12 @@ function deduplicateStops(stops: TransitStop[]): TransitStop[] {
     if (!grid[key]) grid[key] = s;
   }
   return Object.values(grid);
+}
+
+/** Check if a stop name indicates skolskjuts */
+function isSkolskjuts(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.includes("skolskjuts") || lower.includes("skol ");
 }
 
 const BusMap = ({
@@ -91,6 +98,7 @@ const BusMap = ({
   onMapReady,
   isFavorite,
   onToggleFavorite,
+  showSkolskjuts = false,
 }: BusMapProps) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<Map | null>(null);
@@ -113,6 +121,12 @@ const BusMap = ({
     type: "stop" | "bus";
     data: any;
   } | null>(null);
+
+  // Memoize filtered + deduplicated stops
+  const processedStops = useMemo(() => {
+    const filtered = showSkolskjuts ? stops : stops.filter((s) => !isSkolskjuts(s.stop_name));
+    return deduplicateStops(filtered);
+  }, [stops, showSkolskjuts]);
 
   // Map initialization
   useEffect(() => {
@@ -334,21 +348,34 @@ const BusMap = ({
     });
   }, [vehicles, routeMap, filteredStop]);
 
-  // Update stops — deduplicate nearby ones
+  // Update stops in chunks to avoid blocking main thread
   useEffect(() => {
     const source = stopsRawSourceRef.current;
     source.clear();
 
-    const deduped = deduplicateStops(stops);
-    deduped.forEach((s) => {
-      const feature = new Feature({
-        geometry: new Point(fromLonLat([s.stop_lon, s.stop_lat])),
-        featureType: "stop",
-        ...s,
-      });
-      source.addFeature(feature);
-    });
-  }, [stops]);
+    const CHUNK = 500;
+    let i = 0;
+
+    function addChunk() {
+      const end = Math.min(i + CHUNK, processedStops.length);
+      for (; i < end; i++) {
+        const s = processedStops[i];
+        const feature = new Feature({
+          geometry: new Point(fromLonLat([s.stop_lon, s.stop_lat])),
+          featureType: "stop",
+          ...s,
+        });
+        source.addFeature(feature);
+      }
+      if (i < processedStops.length) {
+        requestAnimationFrame(addChunk);
+      }
+    }
+
+    if (processedStops.length > 0) {
+      requestAnimationFrame(addChunk);
+    }
+  }, [processedStops]);
 
   // Update user location + buffers
   useEffect(() => {

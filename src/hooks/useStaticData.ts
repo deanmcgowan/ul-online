@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import type { TransitStop } from "@/components/BusMap";
 
@@ -21,10 +21,18 @@ interface StaticData {
   checklist: ChecklistItem[];
 }
 
-function loadCached<T>(key: string): T | null {
+/** Yield to browser so UI can repaint between heavy operations */
+function yieldToUI(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** Parse JSON off main thread via a short yield */
+async function parseCached<T>(key: string): Promise<T | null> {
   try {
     const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    await yieldToUI();
+    return JSON.parse(raw);
   } catch {
     return null;
   }
@@ -36,122 +44,139 @@ export function useStaticData(): StaticData {
   const [stopRoutes, setStopRoutes] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(true);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
+  const cancelledRef = useRef(false);
 
-  const updateItem = (id: string, status: ChecklistItem["status"]) => {
+  const updateItem = (id: string, status: ChecklistItem["status"], label?: string) => {
     setChecklist((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, status } : item))
+      prev.map((item) =>
+        item.id === id ? { ...item, status, ...(label ? { label } : {}) } : item
+      )
     );
   };
 
   useEffect(() => {
-    let cancelled = false;
+    cancelledRef.current = false;
 
     async function load() {
-      const cachedStops = loadCached<TransitStop[]>(CACHE_KEY_STOPS);
-      const cachedRoutes = loadCached<Record<string, string>>(CACHE_KEY_ROUTES);
-      const cachedStopRoutes = loadCached<Record<string, string[]>>(CACHE_KEY_STOP_ROUTES);
       const cachedHash = localStorage.getItem(CACHE_KEY_HASH) || "";
-      const hasCachedData = !!(cachedStops && cachedRoutes && cachedStopRoutes);
+      // Quick check if we have cached data keys at all (without parsing yet)
+      const hasCachedKeys = !!(
+        localStorage.getItem(CACHE_KEY_STOPS) &&
+        localStorage.getItem(CACHE_KEY_ROUTES) &&
+        localStorage.getItem(CACHE_KEY_STOP_ROUTES)
+      );
 
-      // Build checklist based on whether we have cached data
-      const items: ChecklistItem[] = hasCachedData
+      // Build checklist
+      const items: ChecklistItem[] = hasCachedKeys
         ? [
             { id: "cache", label: "Loading cached data", status: "pending" as const },
             { id: "check", label: "Checking for updates", status: "pending" as const },
           ]
         : [
-            { id: "stops", label: "Downloading stops (one-off)", status: "pending" as const },
-            { id: "routes", label: "Downloading routes (one-off)", status: "pending" as const },
-            { id: "stopRoutes", label: "Downloading stop-route links (one-off)", status: "pending" as const },
+            { id: "fetch", label: "Downloading data (one-off)", status: "pending" as const },
             { id: "process", label: "Processing data", status: "pending" as const },
           ];
 
       setChecklist(items);
+      await yieldToUI(); // Let checklist render
 
-      // 1) Load from cache immediately
-      if (hasCachedData) {
+      // 1) Load from cache with yields between each parse
+      if (hasCachedKeys) {
         updateItem("cache", "loading");
-        setStops(cachedStops!);
-        setRouteMap(cachedRoutes!);
-        setStopRoutes(cachedStopRoutes!);
+        await yieldToUI();
+
+        const cachedStops = await parseCached<TransitStop[]>(CACHE_KEY_STOPS);
+        if (cancelledRef.current) return;
+        if (cachedStops) setStops(cachedStops);
+        await yieldToUI();
+
+        const cachedRoutes = await parseCached<Record<string, string>>(CACHE_KEY_ROUTES);
+        if (cancelledRef.current) return;
+        if (cachedRoutes) setRouteMap(cachedRoutes);
+        await yieldToUI();
+
+        const cachedStopRoutes = await parseCached<Record<string, string[]>>(CACHE_KEY_STOP_ROUTES);
+        if (cancelledRef.current) return;
+        if (cachedStopRoutes) setStopRoutes(cachedStopRoutes);
+
         updateItem("cache", "done");
         setLoading(false);
+        await yieldToUI();
       }
 
       // 2) Check server for updates
       try {
-        if (hasCachedData) {
+        if (hasCachedKeys) {
           updateItem("check", "loading");
+        } else {
+          updateItem("fetch", "loading");
         }
+        await yieldToUI();
 
         const { data, error } = await supabase.functions.invoke("static-data", {
           body: { hash: cachedHash },
         });
 
         if (error) throw error;
-        if (cancelled) return;
+        if (cancelledRef.current) return;
 
-        if (data.unchanged && hasCachedData) {
-          updateItem("check", "done");
-          setChecklist((prev) =>
-            prev.map((item) =>
-              item.id === "check" ? { ...item, label: "Already up to date", status: "done" } : item
-            )
-          );
-          setTimeout(() => { if (!cancelled) setChecklist([]); }, 1500);
+        if (data.unchanged && hasCachedKeys) {
+          updateItem("check", "done", "Already up to date");
+          setTimeout(() => { if (!cancelledRef.current) setChecklist([]); }, 1500);
           return;
         }
 
         // New data arrived — process it
-        if (!hasCachedData) {
-          updateItem("stops", "loading");
+        if (!hasCachedKeys) {
+          updateItem("fetch", "done");
+          updateItem("process", "loading");
+          await yieldToUI();
         }
 
         if (data.stops) {
-          localStorage.setItem(CACHE_KEY_STOPS, JSON.stringify(data.stops));
           setStops(data.stops);
-          if (!hasCachedData) updateItem("stops", "done");
+          await yieldToUI();
+          localStorage.setItem(CACHE_KEY_STOPS, JSON.stringify(data.stops));
+          await yieldToUI();
         }
 
-        if (!hasCachedData) updateItem("routes", "loading");
         if (data.routes) {
           const map: Record<string, string> = {};
-          data.routes.forEach((r: any) => {
+          for (const r of data.routes) {
             map[r.route_id] = r.route_short_name || r.route_id;
-          });
-          localStorage.setItem(CACHE_KEY_ROUTES, JSON.stringify(map));
+          }
           setRouteMap(map);
-          if (!hasCachedData) updateItem("routes", "done");
+          await yieldToUI();
+          localStorage.setItem(CACHE_KEY_ROUTES, JSON.stringify(map));
+          await yieldToUI();
         }
 
-        if (!hasCachedData) updateItem("stopRoutes", "loading");
         if (data.stopRoutes) {
           const map: Record<string, string[]> = {};
-          data.stopRoutes.forEach((sr: any) => {
+          for (const sr of data.stopRoutes) {
             if (!map[sr.stop_id]) map[sr.stop_id] = [];
             map[sr.stop_id].push(sr.route_id);
-          });
-          localStorage.setItem(CACHE_KEY_STOP_ROUTES, JSON.stringify(map));
+          }
           setStopRoutes(map);
-          if (!hasCachedData) updateItem("stopRoutes", "done");
+          await yieldToUI();
+          localStorage.setItem(CACHE_KEY_STOP_ROUTES, JSON.stringify(map));
+          await yieldToUI();
         }
-
-        if (!hasCachedData) updateItem("process", "done");
 
         if (data.hash) {
           localStorage.setItem(CACHE_KEY_HASH, data.hash);
         }
 
-        if (hasCachedData) {
-          setChecklist((prev) =>
-            prev.map((item) =>
-              item.id === "check" ? { ...item, label: "Updated to latest data", status: "done" } : item
-            )
-          );
+        if (hasCachedKeys) {
+          updateItem("check", "done", "Updated to latest data");
+        } else {
+          updateItem("process", "done");
         }
       } catch (err) {
         console.error("Static data fetch error:", err);
-        if (!hasCachedData) {
+        if (hasCachedKeys) {
+          updateItem("check", "done", "Update check failed (using cached data)");
+        } else {
           setChecklist((prev) =>
             prev.map((item) =>
               item.status === "loading" ? { ...item, status: "done", label: item.label + " (failed)" } : item
@@ -160,14 +185,14 @@ export function useStaticData(): StaticData {
         }
       }
 
-      if (!cancelled) {
+      if (!cancelledRef.current) {
         setLoading(false);
-        setTimeout(() => { if (!cancelled) setChecklist([]); }, 2000);
+        setTimeout(() => { if (!cancelledRef.current) setChecklist([]); }, 2000);
       }
     }
 
     load();
-    return () => { cancelled = true; };
+    return () => { cancelledRef.current = true; };
   }, []);
 
   return { stops, routeMap, stopRoutes, loading, checklist };
