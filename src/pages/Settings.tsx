@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { ArrowLeft, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import { useFavoriteStops } from "@/hooks/useFavoriteStops";
 
