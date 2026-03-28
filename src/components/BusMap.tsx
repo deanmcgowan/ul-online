@@ -81,7 +81,7 @@ function deduplicateStops(stops: TransitStop[]): TransitStop[] {
 /** Check if a stop name indicates skolskjuts */
 function isSkolskjuts(name: string): boolean {
   const lower = name.toLowerCase();
-  return lower.includes("skolskjuts") || lower.includes("skol ");
+  return /(skolskjuts|skolhållplats|skolhallplats|skolhpl|skolan|skola|\bskol\b)/.test(lower);
 }
 
 const BusMap = ({
@@ -103,6 +103,8 @@ const BusMap = ({
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<Map | null>(null);
   const overlayRef = useRef<Overlay | null>(null);
+  const stopRenderFrameRef = useRef<number | null>(null);
+  const stopRenderTokenRef = useRef(0);
   const [popupEl] = useState(() => {
     const el = document.createElement("div");
     el.className = "ol-popup-container";
@@ -303,6 +305,9 @@ const BusMap = ({
     });
 
     return () => {
+      if (stopRenderFrameRef.current !== null) {
+        cancelAnimationFrame(stopRenderFrameRef.current);
+      }
       map.setTarget(undefined);
     };
   }, []);
@@ -310,9 +315,9 @@ const BusMap = ({
   // Update vehicles
   useEffect(() => {
     const source = vehicleSourceRef.current;
-    source.clear();
+    source.clear(true);
 
-    vehicles.forEach((v) => {
+    const features = vehicles.map((v) => {
       const lineNumber = routeMap[v.routeId] || v.vehicleLabel || "?";
 
       let isToward: boolean | undefined;
@@ -344,37 +349,70 @@ const BusMap = ({
         })
       );
 
-      source.addFeature(feature);
+      return feature;
     });
+
+    if (features.length > 0) {
+      source.addFeatures(features);
+    }
   }, [vehicles, routeMap, filteredStop]);
 
   // Update stops in chunks to avoid blocking main thread
   useEffect(() => {
     const source = stopsRawSourceRef.current;
-    source.clear();
+    const renderToken = ++stopRenderTokenRef.current;
 
-    const CHUNK = 500;
+    if (stopRenderFrameRef.current !== null) {
+      cancelAnimationFrame(stopRenderFrameRef.current);
+      stopRenderFrameRef.current = null;
+    }
+
+    source.clear(true);
+
+    if (processedStops.length === 0) {
+      return () => {
+        stopRenderTokenRef.current++;
+      };
+    }
+
+    const CHUNK = 250;
     let i = 0;
 
     function addChunk() {
+      if (stopRenderTokenRef.current !== renderToken) return;
+
       const end = Math.min(i + CHUNK, processedStops.length);
+      const features: Feature[] = [];
+
       for (; i < end; i++) {
         const s = processedStops[i];
-        const feature = new Feature({
+        features.push(new Feature({
           geometry: new Point(fromLonLat([s.stop_lon, s.stop_lat])),
           featureType: "stop",
           ...s,
-        });
-        source.addFeature(feature);
+        }));
       }
+
+      if (features.length > 0) {
+        source.addFeatures(features);
+      }
+
       if (i < processedStops.length) {
-        requestAnimationFrame(addChunk);
+        stopRenderFrameRef.current = requestAnimationFrame(addChunk);
+      } else {
+        stopRenderFrameRef.current = null;
       }
     }
 
-    if (processedStops.length > 0) {
-      requestAnimationFrame(addChunk);
-    }
+    stopRenderFrameRef.current = requestAnimationFrame(addChunk);
+
+    return () => {
+      stopRenderTokenRef.current++;
+      if (stopRenderFrameRef.current !== null) {
+        cancelAnimationFrame(stopRenderFrameRef.current);
+        stopRenderFrameRef.current = null;
+      }
+    };
   }, [processedStops]);
 
   // Update user location + buffers
