@@ -111,15 +111,15 @@ const Settings = () => {
           </div>
 
           {/* Skolskjuts toggle */}
-          <div className="flex items-center gap-3">
-            <Checkbox
-              id="skolskjuts"
-              checked={showSkolskjuts}
-              onCheckedChange={(checked) => setShowSkolskjuts(checked === true)}
-            />
+          <div className="flex items-center justify-between">
             <label htmlFor="skolskjuts" className="text-sm font-medium cursor-pointer">
               Show skolskjuts bus stops
             </label>
+            <Switch
+              id="skolskjuts"
+              checked={showSkolskjuts}
+              onCheckedChange={(checked) => setShowSkolskjuts(checked)}
+            />
           </div>
 
           {/* Favourite stops management */}
