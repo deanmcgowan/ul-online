@@ -138,10 +138,9 @@ Recommended extensions:
 
 Use the Run and Debug panel and start one of these profiles:
 
-- `Frontend: Chrome`
 - `Frontend: Edge`
 
-Both profiles start the Vite dev server automatically and attach the browser debugger to `http://localhost:8080`.
+The Edge profile starts the Vite dev server automatically and attaches the browser debugger to `http://localhost:8080`.
 
 ### Unit tests
 
@@ -164,7 +163,7 @@ Run it with:
 npx playwright test
 ```
 
-The `Playwright: current file` launch profile runs the currently open spec in headed Chromium for debugging.
+The `Playwright: current file` launch profile runs the currently open spec in headed Microsoft Edge for debugging.
 
 Add future end-to-end specs under `e2e/`.
 

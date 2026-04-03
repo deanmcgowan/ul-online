@@ -25,12 +25,12 @@ import { createBusCanvas, bearingTowardStop } from "@/lib/busIcon";
 import { Button } from "@/components/ui/button";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import StopPopup from "@/components/StopPopup";
+import { buildStopGroups, findStopGroupForStop, type TransitStopGroup } from "@/lib/stopGroups";
 import "ol/ol.css";
 
 const BusPopup = lazy(() => import("@/components/BusPopup"));
 const VEHICLE_ICON_BUCKET = 15;
-const STOP_CLUSTER_DISTANCE = 50;
-const STOP_CLUSTER_MIN_DISTANCE = 25;
+const STOP_CLUSTER_DISTANCE = 34;
 const CLUSTER_SPLIT_PIXEL_BUFFER = 8;
 
 function padExtent(extent: [number, number, number, number], factor: number): [number, number, number, number] {
@@ -80,20 +80,17 @@ function getClusterSplitZoom(features: Feature[], view: View): number | null {
   }
 
   if (!Number.isFinite(minimumPairDistance)) {
-    return view.getMaxZoom() ?? 20;
+    return Math.min(view.getMaxZoom() ?? 20, currentZoom + 1);
   }
 
   const targetResolution = minimumPairDistance / (STOP_CLUSTER_DISTANCE + CLUSTER_SPLIT_PIXEL_BUFFER);
   const targetZoom = view.getZoomForResolution(targetResolution);
 
   if (!Number.isFinite(targetZoom)) {
-    return view.getMaxZoom() ?? 20;
+    return Math.min(view.getMaxZoom() ?? 20, currentZoom + 1);
   }
 
-  return Math.min(
-    view.getMaxZoom() ?? 20,
-    Math.max(currentZoom + 1, targetZoom + 0.5),
-  );
+  return Math.min(view.getMaxZoom() ?? 20, Math.max(currentZoom + 1, targetZoom + 0.5));
 }
 
 export interface Vehicle {
@@ -128,8 +125,8 @@ interface BusMapProps {
   walkSpeed: number;
   runSpeed: number;
   bufferMinutes: number;
-  filteredStop: TransitStop | null;
-  onStopClick: (stop: TransitStop) => void;
+  filteredStop: TransitStopGroup | null;
+  onStopClick: (stopGroup: TransitStopGroup) => void;
   onBusClick: (vehicle: Vehicle & { lineNumber: string }) => void;
   onMapReady?: (map: Map) => void;
   isFavorite?: (stopId: string) => boolean;
@@ -138,17 +135,6 @@ interface BusMapProps {
   stopVisibilityZoom?: number;
   stopRoutes?: Record<string, string[]>;
   highlightedStop?: TransitStop | null;
-}
-
-/** Deduplicate stops using a grid-based O(n) approach. ~50m threshold. */
-function deduplicateStops(stops: TransitStop[]): TransitStop[] {
-  const CELL = 0.0005; // ~50m
-  const grid: Record<string, TransitStop> = {};
-  for (const s of stops) {
-    const key = `${Math.round(s.stop_lat / CELL)},${Math.round(s.stop_lon / CELL)}`;
-    if (!grid[key]) grid[key] = s;
-  }
-  return Object.values(grid);
 }
 
 /** Check if a stop name indicates skolskjuts */
@@ -205,12 +191,12 @@ const BusMap = ({
   } | null>(null);
 
   // Memoize filtered + deduplicated stops
-  const processedStops = useMemo(() => {
+  const processedStopGroups = useMemo(() => {
     const filtered = showSkolskjuts ? stops : stops.filter((s) => !isSkolskjuts(s.stop_name));
-    return deduplicateStops(filtered);
-  }, [stops, showSkolskjuts]);
+    return buildStopGroups(filtered, stopRoutes);
+  }, [stops, stopRoutes, showSkolskjuts]);
 
-  const visibleStops = useMemo(() => {
+  const visibleStopGroups = useMemo(() => {
     const map = mapRef.current;
     const size = map?.getSize();
 
@@ -227,8 +213,8 @@ const BusMap = ({
     const geographicExtent = transformExtent(projectedExtent, "EPSG:3857", "EPSG:4326") as [number, number, number, number];
     const paddedExtent = padExtent(geographicExtent, 0.25);
 
-    return processedStops.filter((stop) => stopIsInExtent(stop, paddedExtent));
-  }, [processedStops, stopViewportVersion, stopVisibilityZoom]);
+    return processedStopGroups.filter((stopGroup) => stopIsInExtent(stopGroup, paddedExtent));
+  }, [processedStopGroups, stopViewportVersion, stopVisibilityZoom]);
 
   const getVehicleStyle = useCallback((lineNumber: string, bearing: number, isToward?: boolean) => {
     const bearingBucket = ((Math.round(bearing / VEHICLE_ICON_BUCKET) * VEHICLE_ICON_BUCKET) % 360 + 360) % 360;
@@ -256,32 +242,33 @@ const BusMap = ({
 
     const stopsCluster = new ClusterSource({
       distance: STOP_CLUSTER_DISTANCE,
-      minDistance: STOP_CLUSTER_MIN_DISTANCE,
       source: stopsRawSourceRef.current,
     });
 
     const stopsLayer = new VectorLayer({
       source: stopsCluster,
       style: (feature) => {
-        const features = feature.get("features");
-        const size = features?.length || 1;
-        if (size > 1) {
+        const clusteredFeatures = feature.get("features") as Feature[] | undefined;
+        const clusterSize = clusteredFeatures?.length ?? 1;
+
+        if (clusterSize > 1) {
           return new Style({
             image: new CircleStyle({
               radius: 14,
-              fill: new Fill({ color: "rgba(59, 130, 246, 0.7)" }),
+              fill: new Fill({ color: "rgba(59, 130, 246, 0.72)" }),
               stroke: new Stroke({ color: "#1e40af", width: 1.5 }),
             }),
             text: new Text({
-              text: size.toString(),
+              text: clusterSize.toString(),
               fill: new Fill({ color: "#ffffff" }),
               font: "bold 11px system-ui",
             }),
           });
         }
+
         return new Style({
           image: new CircleStyle({
-            radius: 6,
+            radius: 7,
             fill: new Fill({ color: "rgba(59, 130, 246, 0.6)" }),
             stroke: new Stroke({ color: "#1e40af", width: 1.5 }),
           }),
@@ -395,29 +382,34 @@ const BusMap = ({
           e.pixel,
           (feature) => {
             if (handled) return;
-            const features = feature.get("features");
-            if (features) {
-              if (features.length > 1) {
-                const targetZoom = getClusterSplitZoom(features as Feature[], map.getView());
-
-                if (targetZoom !== null) {
-                  map.getView().animate({
-                    center: e.coordinate,
-                    zoom: targetZoom,
-                    duration: 300,
-                  });
-                }
-
-                handled = true;
-              } else {
-                const stopFeature = features[0];
-                const props = stopFeature.getProperties();
-                delete props.geometry;
-                setPopup({ type: "stop", data: props });
-                overlay.setPosition(e.coordinate);
-                handled = true;
-              }
+            const clusteredFeatures = feature.get("features") as Feature[] | undefined;
+            if (!clusteredFeatures || clusteredFeatures.length === 0) {
+              return;
             }
+
+            if (clusteredFeatures.length > 1) {
+              const targetZoom = getClusterSplitZoom(clusteredFeatures, map.getView());
+
+              if (targetZoom !== null) {
+                map.getView().animate({
+                  center: e.coordinate,
+                  zoom: targetZoom,
+                  duration: 300,
+                });
+              }
+
+              handled = true;
+              return;
+            }
+
+            const stopGroup = clusteredFeatures[0].get("stopGroup") as TransitStopGroup | undefined;
+            if (!stopGroup) {
+              return;
+            }
+
+            setPopup({ type: "stop", data: stopGroup });
+            overlay.setPosition(e.coordinate);
+            handled = true;
           },
           { layerFilter: (l) => l === stopsLayer }
         );
@@ -517,7 +509,7 @@ const BusMap = ({
 
     source.clear(true);
 
-    if (visibleStops.length === 0) {
+    if (visibleStopGroups.length === 0) {
       return () => {
         stopRenderTokenRef.current++;
       };
@@ -529,15 +521,16 @@ const BusMap = ({
     function addChunk() {
       if (stopRenderTokenRef.current !== renderToken) return;
 
-      const end = Math.min(i + CHUNK, visibleStops.length);
+      const end = Math.min(i + CHUNK, visibleStopGroups.length);
       const features: Feature[] = [];
 
       for (; i < end; i++) {
-        const s = visibleStops[i];
+        const stopGroup = visibleStopGroups[i];
         features.push(new Feature({
-          geometry: new Point(fromLonLat([s.stop_lon, s.stop_lat])),
+          geometry: new Point(fromLonLat([stopGroup.stop_lon, stopGroup.stop_lat])),
           featureType: "stop",
-          ...s,
+          stopGroup,
+          stopGroupSize: stopGroup.stops.length,
         }));
       }
 
@@ -545,7 +538,7 @@ const BusMap = ({
         source.addFeatures(features);
       }
 
-      if (i < visibleStops.length) {
+      if (i < visibleStopGroups.length) {
         stopRenderFrameRef.current = requestAnimationFrame(addChunk);
       } else {
         stopRenderFrameRef.current = null;
@@ -561,7 +554,7 @@ const BusMap = ({
         stopRenderFrameRef.current = null;
       }
     };
-  }, [visibleStops]);
+  }, [visibleStopGroups]);
 
   // Update user location + buffers
   useEffect(() => {
@@ -623,29 +616,34 @@ const BusMap = ({
       return;
     }
 
-    const coordinate = fromLonLat([highlightedStop.stop_lon, highlightedStop.stop_lat]);
-    setPopup({ type: "stop", data: highlightedStop });
+    const highlightedGroup = findStopGroupForStop(highlightedStop, processedStopGroups);
+    if (!highlightedGroup) {
+      return;
+    }
+
+    const coordinate = fromLonLat([highlightedGroup.stop_lon, highlightedGroup.stop_lat]);
+    setPopup({ type: "stop", data: highlightedGroup });
     overlayRef.current.setPosition(coordinate);
     mapRef.current.getView().animate({
       center: coordinate,
       zoom: Math.max(mapRef.current.getView().getZoom() ?? 13, 15),
       duration: 400,
     });
-  }, [highlightedStop]);
+  }, [highlightedStop, processedStopGroups]);
 
   const popupContent = popup ? (
     <div className="bg-background rounded-lg shadow-lg border p-3 min-w-[200px] max-w-[280px] relative">
       {popup.type === "stop" ? (
         <StopPopup
-          stop={popup.data as TransitStop}
+          stopGroup={popup.data as TransitStopGroup}
           stops={stops}
           vehicles={vehicles}
           routeMap={routeMap}
           stopRoutes={stopRoutes}
           isFavorite={isFavorite}
           onToggleFavorite={onToggleFavorite}
-          onFilter={(selectedStop) => {
-            onStopClick(selectedStop);
+          onFilter={(selectedStopGroup) => {
+            onStopClick(selectedStopGroup);
             setPopup(null);
             overlayRef.current?.setPosition(undefined);
           }}
@@ -657,6 +655,8 @@ const BusMap = ({
             userLocation={userLocation}
             walkSpeed={walkSpeed}
             runSpeed={runSpeed}
+            stops={stops}
+            routeMap={routeMap}
           />
         </Suspense>
       )}

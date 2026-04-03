@@ -47,6 +47,12 @@ export interface AppStrings {
   nextLiveArrivalLoading: string;
   nextLiveArrivalUnavailable: string;
   arrivingNow: string;
+  timetableTime: (timeText: string) => string;
+  headingTo: (placeText: string) => string;
+  northSide: string;
+  southSide: string;
+  eastSide: string;
+  westSide: string;
   inMinutes: (minutesText: string) => string;
   line: string;
   distance: string;
@@ -125,6 +131,8 @@ export interface AppStrings {
   commuteRiskAlertTitle: string;
   commuteRiskAlert: (origin: string, destination: string, lineNumber: string) => string;
   commuteRiskAlertWithFallback: (origin: string, destination: string, lineNumber: string, fallbackLine: string) => string;
+  nextStops: string;
+  noResults: string;
 }
 
 const STRINGS: Record<SupportedLanguage, AppStrings> = {
@@ -173,6 +181,12 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     nextLiveArrivalLoading: "Calculating live arrival...",
     nextLiveArrivalUnavailable: "No live arrival estimate is available right now.",
     arrivingNow: "Arriving now",
+    timetableTime: (timeText) => `Timetable ${timeText}`,
+    headingTo: (placeText) => `towards ${placeText}`,
+    northSide: "north side",
+    southSide: "south side",
+    eastSide: "east side",
+    westSide: "west side",
     inMinutes: (minutesText) => `in ${minutesText}`,
     line: "Line",
     distance: "Distance",
@@ -251,6 +265,8 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     commuteRiskAlertTitle: "Tight departure",
     commuteRiskAlert: (origin, destination, lineNumber) => `${origin} to ${destination} is tight for line ${lineNumber}.`,
     commuteRiskAlertWithFallback: (origin, destination, lineNumber, fallbackLine) => `${origin} to ${destination} is tight for line ${lineNumber}. Line ${fallbackLine} is the safer fallback.`,
+    nextStops: "Next stops",
+    noResults: "No information available.",
   },
   "sv-SE": {
     appTitle: "UL Busskarta",
@@ -297,6 +313,12 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     nextLiveArrivalLoading: "Beräknar liveankomst...",
     nextLiveArrivalUnavailable: "Ingen liveberäkning finns tillgänglig just nu.",
     arrivingNow: "Anländer nu",
+    timetableTime: (timeText) => `Tidtabell ${timeText}`,
+    headingTo: (placeText) => `mot ${placeText}`,
+    northSide: "norra sidan",
+    southSide: "södra sidan",
+    eastSide: "östra sidan",
+    westSide: "västra sidan",
     inMinutes: (minutesText) => `om ${minutesText}`,
     line: "Linje",
     distance: "Avstånd",
@@ -375,6 +397,8 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     commuteRiskAlertTitle: "Tajt avgång",
     commuteRiskAlert: (origin, destination, lineNumber) => `Resan från ${origin} till ${destination} är tajt för linje ${lineNumber}.`,
     commuteRiskAlertWithFallback: (origin, destination, lineNumber, fallbackLine) => `Resan från ${origin} till ${destination} är tajt för linje ${lineNumber}. Linje ${fallbackLine} är ett säkrare reservval.`,
+    nextStops: "Nästa hållplatser",
+    noResults: "Ingen information tillgänglig.",
   },
 };
 

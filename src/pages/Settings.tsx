@@ -254,7 +254,10 @@ const Settings = () => {
                     <div className="overflow-hidden rounded-xl border bg-muted/20">
                       {favorites.map((fav, index) => (
                         <div key={fav.stop_id} className="flex items-center gap-2 border-b px-3 py-2.5 last:border-b-0">
-                          <span className="min-w-0 flex-1 truncate text-sm">{fav.stop_name}</span>
+                          <div className="min-w-0 flex-1">
+                            <span className="block truncate text-sm">{fav.stop_name}</span>
+                            <span className="block truncate text-xs text-muted-foreground">#{fav.stop_id}</span>
+                          </div>
                           <div className="flex items-center gap-1">
                             <Button
                               variant="ghost"

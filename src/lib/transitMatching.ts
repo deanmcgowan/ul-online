@@ -7,9 +7,38 @@ export interface StopTimeMatch {
   trip_id: string;
 }
 
-const PRIMARY_STOP_GROUP_RADIUS_METERS = 90;
-const SECONDARY_STOP_GROUP_RADIUS_METERS = 140;
+const PRIMARY_STOP_GROUP_RADIUS_METERS = 70;
+const NAME_PREFIX_GROUP_RADIUS_METERS = 45;
 const SAME_SEQUENCE_STOP_GRACE_METERS = 45;
+const OFF_HEADING_FUTURE_STOP_SEQUENCE_GRACE = 2;
+
+function normalizeStopName(name: string): string {
+  return name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\([^)]*\)/g, " ")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((token, index, tokens) => !(index === tokens.length - 1 && /^[a-z0-9]$/.test(token)))
+    .join(" ");
+}
+
+function stopNamesShareBase(left: string, right: string): boolean {
+  const normalizedLeft = normalizeStopName(left);
+  const normalizedRight = normalizeStopName(right);
+
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+
+  if (normalizedLeft === normalizedRight) {
+    return true;
+  }
+
+  return normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft);
+}
 
 export function haversineDistanceMeters(fromLat: number, fromLon: number, toLat: number, toLon: number): number {
   const earthRadius = 6371000;
@@ -36,11 +65,11 @@ export function isSameStopGroup(stop: TransitStop, candidate: TransitStop): bool
     candidate.stop_lon,
   );
 
-  if (distance <= PRIMARY_STOP_GROUP_RADIUS_METERS) {
+  if (distance <= PRIMARY_STOP_GROUP_RADIUS_METERS && stopNamesShareBase(stop.stop_name, candidate.stop_name)) {
     return true;
   }
 
-  return candidate.stop_name === stop.stop_name && distance <= SECONDARY_STOP_GROUP_RADIUS_METERS;
+  return candidate.stop_name === stop.stop_name && distance <= NAME_PREFIX_GROUP_RADIUS_METERS;
 }
 
 export function pickBestUpcomingStopMatch(
@@ -55,11 +84,35 @@ export function pickBestUpcomingStopMatch(
         return false;
       }
 
-      if (stopTime.stop_sequence > vehicle.currentStopSequence) {
+      const matchedStop = relatedStopMap.get(stopTime.stop_id);
+      if (!matchedStop) {
+        return false;
+      }
+
+      const sequenceDelta = stopTime.stop_sequence - vehicle.currentStopSequence;
+      const distanceToStop = haversineDistanceMeters(
+        vehicle.lat,
+        vehicle.lon,
+        matchedStop.stop_lat,
+        matchedStop.stop_lon,
+      );
+      const isTowardMatchedStop = bearingTowardStop(
+        vehicle.lat,
+        vehicle.lon,
+        vehicle.bearing,
+        matchedStop.stop_lat,
+        matchedStop.stop_lon,
+      );
+
+      if (sequenceDelta > 0) {
+        if (sequenceDelta > OFF_HEADING_FUTURE_STOP_SEQUENCE_GRACE && !isTowardMatchedStop) {
+          return false;
+        }
+
         return true;
       }
 
-      if (stopTime.stop_sequence < vehicle.currentStopSequence) {
+      if (sequenceDelta < 0) {
         return false;
       }
 
@@ -73,11 +126,6 @@ export function pickBestUpcomingStopMatch(
         }
 
         const currentStop = relatedStopMap.get(vehicle.stopId);
-        const matchedStop = relatedStopMap.get(stopTime.stop_id);
-
-        if (!matchedStop) {
-          return false;
-        }
 
         if (vehicle.stopId === stopTime.stop_id) {
           return true;
@@ -90,29 +138,11 @@ export function pickBestUpcomingStopMatch(
         return isSameStopGroup(currentStop, matchedStop);
       }
 
-      const matchedStop = relatedStopMap.get(stopTime.stop_id);
-      if (!matchedStop) {
-        return false;
-      }
-
-      const distanceToStop = haversineDistanceMeters(
-        vehicle.lat,
-        vehicle.lon,
-        matchedStop.stop_lat,
-        matchedStop.stop_lon,
-      );
-
       if (distanceToStop <= SAME_SEQUENCE_STOP_GRACE_METERS) {
         return true;
       }
 
-      return bearingTowardStop(
-        vehicle.lat,
-        vehicle.lon,
-        vehicle.bearing,
-        matchedStop.stop_lat,
-        matchedStop.stop_lon,
-      );
+      return isTowardMatchedStop;
     })
     .sort((left, right) => {
       const leftStop = relatedStopMap.get(left.stop_id);

@@ -13,6 +13,7 @@ import RefreshTimer from "@/components/RefreshTimer";
 import { useFavoriteStops } from "@/hooks/useFavoriteStops";
 import { useSavedPlaces } from "@/hooks/useSavedPlaces";
 import { useStaticData } from "@/hooks/useStaticData";
+import { buildStopGroups, findStopGroupForStop, type TransitStopGroup } from "@/lib/stopGroups";
 import Map from "ol/Map";
 import { fromLonLat, toLonLat } from "ol/proj";
 
@@ -84,10 +85,11 @@ const Index = () => {
   const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteStops();
   const { savedPlaces } = useSavedPlaces();
   const { stops, routeMap, stopRoutes, loading: staticLoading, checklist } = useStaticData();
+  const stopGroups = useMemo(() => buildStopGroups(stops, stopRoutes), [stops, stopRoutes]);
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
-  const [filteredStop, setFilteredStop] = useState<TransitStop | null>(null);
+  const [filteredStop, setFilteredStop] = useState<TransitStopGroup | null>(null);
   const [isPageVisible, setIsPageVisible] = useState(() => document.visibilityState === "visible");
   const [isWindowFocused, setIsWindowFocused] = useState(getInitialAppActiveState);
   const [lastRefresh, setLastRefresh] = useState(Date.now());
@@ -323,8 +325,13 @@ const Index = () => {
     return () => stopLocationTracking();
   }, [isAppActive, shouldTrackLocation, startLocationTracking, stopLocationTracking]);
 
-  const handleStopClick = useCallback((stop: TransitStop) => {
-    setFilteredStop(stop);
+  const resolveStopGroup = useCallback(
+    (stop: TransitStop) => findStopGroupForStop(stop, stopGroups),
+    [stopGroups],
+  );
+
+  const handleStopClick = useCallback((stopGroup: TransitStopGroup) => {
+    setFilteredStop(stopGroup);
     setHighlightedCommuteStop(null);
     setShowFavorites(false);
   }, []);
@@ -363,11 +370,11 @@ const Index = () => {
   );
 
   const handleFavoriteSelect = useCallback((stop: TransitStop) => {
-    setFilteredStop(stop);
+    setFilteredStop(resolveStopGroup(stop));
     setHighlightedCommuteStop(null);
     setActiveCommutePlanId(null);
     setShowFavorites(false);
-  }, []);
+  }, [resolveStopGroup]);
 
   const handleCommutePlanSelect = useCallback((plan: Parameters<NonNullable<React.ComponentProps<typeof CommuteDashboard>["onSelectPlan"]>>[0]) => {
     if (!plan.bestOption) {
@@ -375,7 +382,7 @@ const Index = () => {
     }
 
     setActiveCommutePlanId(plan.id);
-    setFilteredStop(plan.bestOption.originStop);
+    setFilteredStop(resolveStopGroup(plan.bestOption.originStop));
     setHighlightedCommuteStop({ ...plan.bestOption.originStop });
     setShowFavorites(false);
 
@@ -386,39 +393,20 @@ const Index = () => {
         plan.bestOption.lineNumber,
       ),
     });
-  }, [strings, toast]);
-
-  // Collect all route_ids for a stop AND its nearby siblings (~300m)
-  const getRoutesForStop = useCallback((stop: TransitStop): Set<string> => {
-    const routes = new Set<string>();
-    // Find all stop_ids near this stop (both sides of street, etc.)
-    const nearStopIds = stops
-      .filter((s) => {
-        const dlat = s.stop_lat - stop.stop_lat;
-        const dlon = s.stop_lon - stop.stop_lon;
-        return Math.abs(dlat) < 0.003 && Math.abs(dlon) < 0.003;
-      })
-      .map((s) => s.stop_id);
-    
-    for (const sid of nearStopIds) {
-      const r = stopRoutes[sid];
-      if (r) r.forEach((id) => routes.add(id));
-    }
-    return routes;
-  }, [stops, stopRoutes]);
+  }, [resolveStopGroup, strings, toast]);
 
   const filteredVehicles = useMemo(() => {
     if (!filteredStop) {
       return vehicles;
     }
 
-    const allowedRoutes = getRoutesForStop(filteredStop);
-    if (allowedRoutes.size > 0) {
+    if (filteredStop.routeIds.length > 0) {
+      const allowedRoutes = new Set(filteredStop.routeIds);
       return vehicles.filter((v) => allowedRoutes.has(v.routeId));
     }
 
     return vehicles;
-  }, [filteredStop, getRoutesForStop, vehicles]);
+  }, [filteredStop, vehicles]);
 
   return (
     <div className="relative h-[100dvh] w-screen overflow-hidden">
@@ -502,7 +490,8 @@ const Index = () => {
                 className="w-full text-left px-4 py-2.5 hover:bg-accent text-sm transition-colors"
                 onClick={() => handleFavoriteSelect(fav)}
               >
-                {fav.stop_name}
+                <span className="block font-medium">{fav.stop_name}</span>
+                <span className="block text-xs text-muted-foreground">#{fav.stop_id}</span>
               </button>
             ))}
           </div>

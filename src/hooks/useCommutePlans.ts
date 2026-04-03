@@ -5,6 +5,7 @@ import { bearingTowardStop } from "@/lib/busIcon";
 import type { RoadSituation } from "@/hooks/useRoadSituations";
 import type { SavedPlace } from "@/lib/savedPlaces";
 import { haversineDistanceMeters, pickBestUpcomingStopMatch, type StopTimeMatch } from "@/lib/transitMatching";
+import { estimateRemainingTripSeconds, type ScheduledStopTimeRow } from "@/lib/tripSchedules";
 
 const PREFERRED_STOP_DISTANCE_METERS = 850;
 const MAX_STOPS_PER_PLACE = 6;
@@ -70,6 +71,7 @@ interface RawCommuteOption {
   approximateEtaSeconds: number;
   approximateScore: number;
   isTowardOrigin: boolean;
+  scheduledEtaSeconds: number | null;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -372,15 +374,15 @@ export function useCommutePlans({
 
       const { data, error } = await supabase
         .from("stop_times")
-        .select("trip_id, stop_id, stop_sequence")
+        .select("trip_id, stop_id, stop_sequence, arrival_time, departure_time")
         .in("trip_id", [...new Set(candidateVehicles.map((vehicle) => vehicle.tripId))])
-        .in("stop_id", [...new Set([...originStopIds, ...destinationStopIds])]);
+;
 
       if (error) {
         throw error;
       }
 
-      const stopTimes = (data ?? []) as StopTimeMatch[];
+      const stopTimes = (data ?? []) as ScheduledStopTimeRow[];
       const originStopMap = new Map(originStops.map((entry) => [entry.stop.stop_id, entry.stop]));
       const destinationStopMap = new Map(destinationStops.map((entry) => [entry.stop.stop_id, entry.stop]));
       const selectedOriginStop = originStops[0].stop;
@@ -444,9 +446,11 @@ export function useCommutePlans({
         );
 
         const approximateScore =
-          getApproximateVehicleEta(vehicle, originStop, stopCount, isTowardOrigin) +
+          (estimateRemainingTripSeconds(vehicle, vehicleStopTimes, originMatch.stop_sequence) ?? getApproximateVehicleEta(vehicle, originStop, stopCount, isTowardOrigin)) +
           Math.round(originStopDistanceMeters * 0.9) +
           Math.round(destinationStopDistanceMeters * 0.35);
+
+        const scheduledEtaSeconds = estimateRemainingTripSeconds(vehicle, vehicleStopTimes, originMatch.stop_sequence);
 
         rawOptions.push({
           vehicle,
@@ -456,9 +460,10 @@ export function useCommutePlans({
           originStopDistanceMeters,
           destinationStopDistanceMeters,
           stopCount,
-          approximateEtaSeconds: getApproximateVehicleEta(vehicle, originStop, stopCount, isTowardOrigin),
+          approximateEtaSeconds: scheduledEtaSeconds ?? getApproximateVehicleEta(vehicle, originStop, stopCount, isTowardOrigin),
           approximateScore,
           isTowardOrigin,
+          scheduledEtaSeconds,
         });
       }
 
@@ -482,9 +487,13 @@ export function useCommutePlans({
             let vehicleEtaSeconds = option.approximateEtaSeconds;
 
             try {
+              if (option.scheduledEtaSeconds !== null) {
+                vehicleEtaSeconds = option.scheduledEtaSeconds;
+              } else {
               const routeDurationSeconds = await getRoadDurationSeconds(option.vehicle, option.originStop, controller.signal);
               if (routeDurationSeconds !== null) {
                 vehicleEtaSeconds = Math.round(routeDurationSeconds + Math.max(0, option.stopCount - 1) * 25 + (option.isTowardOrigin ? 0 : 90));
+              }
               }
             } catch {
               vehicleEtaSeconds = option.approximateEtaSeconds;
