@@ -47,15 +47,15 @@ function simpleHash(str: string): string {
 export const importRoute = new Hono();
 
 importRoute.post("/", async (c) => {
-  const apiKey = process.env.TRAFIKLAB_GTFS_REGIONAL_STATIC_KEY;
+  const apiKey = process.env.TRAFIKLAB_SWEDEN3_STATIC_KEY;
   if (!apiKey) {
-    return c.json({ error: "Regional Static API key not configured" }, 500);
+    return c.json({ error: "Sweden 3 Static API key not configured" }, 500);
   }
 
   const db = getDb();
 
   const url = `https://opendata.samtrafiken.se/gtfs/ul/ul.zip?key=${apiKey}`;
-  console.log("Downloading GTFS Regional UL data...");
+  console.log("Downloading GTFS Sweden 3 UL data...");
   const response = await fetch(url);
   if (!response.ok) {
     return c.json(

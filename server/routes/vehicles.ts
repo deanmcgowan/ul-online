@@ -99,7 +99,7 @@ export const vehiclesRoute = new Hono();
 vehiclesRoute.post("/", async (c) => {
   pruneTripRouteCache();
 
-  const apiKey = process.env.TRAFIKLAB_GTFS_RT_KEY;
+  const apiKey = process.env.TRAFIKLAB_SWEDEN3_RT_KEY;
   if (!apiKey) {
     return c.json({ error: "API key not configured" }, 500);
   }

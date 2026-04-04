@@ -10,19 +10,20 @@ set -euo pipefail
 
 ENV="${1:-stage}"
 REGION="europe-north1"
+TAG="$(date +%Y%m%d-%H%M%S)"
 
 case "${ENV}" in
   stage)
-    echo "==> Deploying to STAGING"
+    echo "==> Deploying to STAGING (tag: ${TAG})"
     gcloud builds submit \
       --config=cloudbuild.yaml \
-      --substitutions="_ENV=stage,_MIN_INSTANCES=0,_MAX_INSTANCES=2"
+      --substitutions="_ENV=stage,_MIN_INSTANCES=0,_MAX_INSTANCES=2,_TAG=${TAG}"
     ;;
   prod)
-    echo "==> Deploying to PRODUCTION"
+    echo "==> Deploying to PRODUCTION (tag: ${TAG})"
     gcloud builds submit \
       --config=cloudbuild.yaml \
-      --substitutions="_ENV=prod,_MIN_INSTANCES=1,_MAX_INSTANCES=5"
+      --substitutions="_ENV=prod,_MIN_INSTANCES=1,_MAX_INSTANCES=5,_TAG=${TAG}"
     ;;
   *)
     echo "Usage: deploy.sh [stage|prod]"

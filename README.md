@@ -92,8 +92,8 @@ Do **not** put private API keys, service role keys, or third-party secrets in `V
 Your Edge Functions will also need server-side secrets configured for:
 
 ```bash
-TRAFIKLAB_GTFS_RT_KEY=your_realtime_api_key
-TRAFIKLAB_GTFS_REGIONAL_STATIC_KEY=your_static_api_key
+TRAFIKLAB_SWEDEN3_RT_KEY=your_sweden3_realtime_api_key
+TRAFIKLAB_SWEDEN3_STATIC_KEY=your_sweden3_static_api_key
 TRAFIKVERKET_OPEN_DATA_API_KEY=your_trafikverket_open_data_api_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 ```
@@ -103,7 +103,7 @@ This is the secure, industry-standard place for your private credentials in this
 Recommended split for this app:
 
 - Frontend `.env`: `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`
-- Supabase Edge Function secrets: `TRAFIKLAB_GTFS_RT_KEY`, `TRAFIKLAB_GTFS_REGIONAL_STATIC_KEY`, `TRAFIKVERKET_OPEN_DATA_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
+- Server secrets: `TRAFIKLAB_SWEDEN3_RT_KEY`, `TRAFIKLAB_SWEDEN3_STATIC_KEY`, `TRAFIKVERKET_OPEN_DATA_API_KEY`
 
 The repository now ignores local `.env` files, so your machine-specific values stay out of git.
 
