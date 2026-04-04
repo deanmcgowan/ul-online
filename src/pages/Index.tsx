@@ -8,11 +8,13 @@ import { Button } from "@/components/ui/button";
 import { useCommutePlans, getTrafficQueryForPlan } from "@/hooks/useCommutePlans";
 import { useRoadSituations } from "@/hooks/useRoadSituations";
 import { useToast } from "@/hooks/use-toast";
-import { Settings, X, Locate, Star, Loader2, Check, Circle } from "lucide-react";
+import { Settings, X, Locate, Star, Loader2, Check, Circle, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import RefreshTimer from "@/components/RefreshTimer";
 import { useFavoriteStops } from "@/hooks/useFavoriteStops";
 import { useSavedPlaces } from "@/hooks/useSavedPlaces";
 import { useStaticData } from "@/hooks/useStaticData";
+import { useTripUpdates } from "@/hooks/useTripUpdates";
+import { useServiceAlerts } from "@/hooks/useServiceAlerts";
 import { buildStopGroups, findStopGroupForStop, type TransitStopGroup } from "@/lib/stopGroups";
 import Map from "ol/Map";
 import { fromLonLat, toLonLat } from "ol/proj";
@@ -117,6 +119,9 @@ const Index = () => {
     stopVisibilityZoom,
   } = preferences;
   const { situations: roadSituations } = useRoadSituations(trafficQuery, isAppActive);
+  const { delayByTrip } = useTripUpdates(isAppActive);
+  const { alerts: serviceAlerts } = useServiceAlerts(isAppActive, resolvedLanguage === "sv-SE" ? "sv" : "en");
+  const [showAlerts, setShowAlerts] = useState(false);
   const { plans: commutePlans, loading: commuteLoading } = useCommutePlans({
     savedPlaces,
     userLocation,
@@ -349,13 +354,18 @@ const Index = () => {
     }
 
     if (mapInstance) {
-      mapInstance.getView().animate({
-        center: fromLonLat(userLocation),
-        zoom: 15,
+      const [lon, lat] = userLocation;
+      const runRadiusMeters = (runSpeed / 3.6) * (bufferMinutes * 60);
+      const deltaLat = runRadiusMeters / 111320;
+      const deltaLon = runRadiusMeters / (111320 * Math.cos((lat * Math.PI) / 180));
+      const sw = fromLonLat([lon - deltaLon, lat - deltaLat]);
+      const ne = fromLonLat([lon + deltaLon, lat + deltaLat]);
+      mapInstance.getView().fit([sw[0], sw[1], ne[0], ne[1]], {
+        padding: [60, 60, 60, 60],
         duration: 500,
       });
     }
-  }, [userLocation, mapInstance]);
+  }, [userLocation, mapInstance, runSpeed, bufferMinutes]);
 
   const handleToggleFavorite = useCallback(
     (stop: TransitStop) => {
@@ -417,6 +427,7 @@ const Index = () => {
         walkSpeed={walkSpeed}
         runSpeed={runSpeed}
         bufferMinutes={bufferMinutes}
+        maxWalkDistanceMeters={maxWalkDistanceMeters}
         filteredStop={filteredStop}
         onStopClick={handleStopClick}
         onBusClick={() => {}}
@@ -426,6 +437,7 @@ const Index = () => {
         stopVisibilityZoom={stopVisibilityZoom}
         stopRoutes={stopRoutes}
         highlightedStop={highlightedCommuteStop}
+        tripDelayMap={delayByTrip}
       />
 
       {staticLoading && stops.length === 0 && checklist.length > 0 && (
@@ -496,9 +508,40 @@ const Index = () => {
         </div>
       )}
 
-      <div className="absolute bottom-6 left-4 z-10">
+      <div className="absolute bottom-6 left-4 z-10 flex flex-col gap-2 items-start">
         <RefreshTimer intervalMs={ACTIVE_VEHICLE_REFRESH_MS} lastRefresh={lastRefresh} isActive={isAppActive} />
       </div>
+
+      {/* Service alerts */}
+      {serviceAlerts.length > 0 && (
+        <div className="absolute bottom-20 left-4 right-16 z-10 max-w-sm">
+          <button
+            className="flex items-center gap-2 bg-destructive/90 text-destructive-foreground backdrop-blur-sm rounded-lg px-3 py-2 shadow-lg text-xs font-medium w-full text-left"
+            onClick={() => setShowAlerts(!showAlerts)}
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span className="flex-1">{strings.serviceAlertCount(serviceAlerts.length)}</span>
+            {showAlerts ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronUp className="h-3.5 w-3.5 shrink-0" />}
+          </button>
+          {showAlerts && (
+            <div className="mt-1 rounded-lg border bg-background/95 backdrop-blur-sm shadow-lg max-h-[40vh] overflow-y-auto">
+              {serviceAlerts.map((alert) => (
+                <div key={alert.id} className="px-3 py-2 border-b last:border-b-0">
+                  <p className="text-xs font-semibold">{alert.header}</p>
+                  {alert.description && (
+                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-3">{alert.description}</p>
+                  )}
+                  {alert.url && (
+                    <a href={alert.url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary mt-0.5 inline-block">
+                      {strings.openSourceLink}
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="absolute bottom-6 right-4 flex flex-col gap-2 z-10">
         {favorites.length > 0 && (

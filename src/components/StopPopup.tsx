@@ -17,6 +17,10 @@ interface StopPopupProps {
   vehicles: Vehicle[];
   routeMap: Record<string, string>;
   stopRoutes: Record<string, string[]>;
+  userLocation: [number, number] | null;
+  walkSpeed: number;
+  runSpeed: number;
+  maxWalkDistanceMeters: number;
   onFilter: (stopGroup: TransitStopGroup) => void;
   onToggleFavorite?: (stop: TransitStop) => void;
   isFavorite?: (stopId: string) => boolean;
@@ -577,6 +581,10 @@ export default function StopPopup({
   vehicles,
   routeMap,
   stopRoutes,
+  userLocation,
+  walkSpeed,
+  runSpeed,
+  maxWalkDistanceMeters,
   onFilter,
   onToggleFavorite,
   isFavorite,
@@ -667,9 +675,33 @@ export default function StopPopup({
     };
   }, [platformGroups, stopGroup, routeMap, vehicles, stops]);
 
+  const distanceInfo = useMemo(() => {
+    if (!userLocation) return null;
+    const [lon, lat] = userLocation;
+    const dist = haversineDistanceMeters(lat, lon, stopGroup.stop_lat, stopGroup.stop_lon);
+    const walkMin = dist / (walkSpeed / 3.6) / 60;
+    const runMin = dist / (runSpeed / 3.6) / 60;
+    return { dist, walkMin, runMin };
+  }, [userLocation, stopGroup.stop_lat, stopGroup.stop_lon, walkSpeed, runSpeed]);
+
   return (
     <div>
       <h3 className="font-semibold text-sm">{stopGroup.stop_name}</h3>
+      {distanceInfo && (
+        <p className="text-xs text-muted-foreground mt-0.5">
+          {distanceInfo.dist < 1000
+            ? `${Math.round(distanceInfo.dist)} m`
+            : `${(distanceInfo.dist / 1000).toFixed(1)} km`}
+          {distanceInfo.dist <= maxWalkDistanceMeters * 3 && (
+            <>
+              {" · "}
+              🚶 {Math.max(1, Math.round(distanceInfo.walkMin))} min
+              {" · "}
+              🏃 {Math.max(1, Math.round(distanceInfo.runMin))} min
+            </>
+          )}
+        </p>
+      )}
       <div className="mt-2 space-y-2">
         {platformGroups.map((platform) => (
           <StopDirectionCard

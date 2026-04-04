@@ -1,16 +1,16 @@
 import { useEffect, useState, useMemo, useRef } from "react";
-import { Loader2, MapPin } from "lucide-react";
+import { Loader2, MapPin, AlertTriangle } from "lucide-react";
 import type { Vehicle, TransitStop } from "@/components/BusMap";
+import type { TripDelay } from "@/hooks/useTripUpdates";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { fetchStopTimes } from "@/lib/api";
 
 interface BusPopupProps {
   vehicle: Vehicle & { lineNumber: string };
   userLocation: [number, number] | null;
-  walkSpeed: number;
-  runSpeed: number;
   stops: TransitStop[];
   routeMap: Record<string, string>;
+  tripDelay: TripDelay | null;
 }
 
 interface StopTimeRow {
@@ -26,6 +26,8 @@ interface NextStopEntry {
   stopLat: number;
   stopLon: number;
   scheduledTime: string | null;
+  rawTime: string | null;
+  stopSequence: number;
   isTerminal: boolean;
 }
 
@@ -69,13 +71,28 @@ function formatGtfsTime(value: string | null): string | null {
   return `${String(hours).padStart(2, "0")}:${String(parts[1]).padStart(2, "0")}`;
 }
 
+/** Compute expected time by adding delay seconds to a raw GTFS time string */
+function computeExpectedTime(rawTime: string | null, delaySec: number | null): string | null {
+  if (!rawTime) return null;
+  if (delaySec == null || delaySec === 0) return formatGtfsTime(rawTime);
+  const totalSec = gtfsTimeToSeconds(rawTime) + delaySec;
+  const hours = ((Math.floor(totalSec / 3600) % 24) + 24) % 24;
+  const minutes = Math.floor((totalSec % 3600) / 60);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+/** Current wall-clock time as seconds since midnight */
+function nowSeconds(): number {
+  const d = new Date();
+  return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+}
+
 const BusPopup = ({
   vehicle,
   userLocation,
-  walkSpeed,
-  runSpeed,
   stops,
   routeMap,
+  tripDelay,
 }: BusPopupProps) => {
   const { strings } = useAppPreferences();
   // Full schedule for the trip — fetched once per tripId
@@ -83,13 +100,6 @@ const BusPopup = ({
   const [loadingStops, setLoadingStops] = useState(false);
   const fetchedTripRef = useRef<string>("");
   const stopById = useMemo(() => new Map(stops.map((s) => [s.stop_id, s])), [stops]);
-
-  const distToVehicle = userLocation
-    ? haversineDistance(userLocation[1], userLocation[0], vehicle.lat, vehicle.lon)
-    : null;
-
-  const walkTimeMin = distToVehicle !== null ? distToVehicle / (walkSpeed / 3.6) / 60 : null;
-  const runTimeMin = distToVehicle !== null ? distToVehicle / (runSpeed / 3.6) / 60 : null;
 
   // Fetch full schedule ONCE per tripId
   useEffect(() => {
@@ -110,14 +120,29 @@ const BusPopup = ({
   }, [vehicle.tripId]);
 
   // Derive upcoming stops from cached schedule + current vehicle position.
-  // Re-computes whenever the bus moves, without querying the DB.
+  // Re-computes whenever the bus moves or its GTFS RT stop sequence updates.
   const nextStops = useMemo((): NextStopEntry[] => {
     if (schedule.length === 0) return [];
 
-    // Use GPS proximity to find the nearest stop on the route
-    let nearestIdx = 0;
-    let nearestDist = Infinity;
-    if (vehicle.lat && vehicle.lon) {
+    let nextIdx = -1;
+
+    // Method 1: GTFS RT currentStopSequence — most authoritative
+    if (vehicle.currentStopSequence > 0) {
+      const idx = schedule.findIndex((row) => row.stop_sequence >= vehicle.currentStopSequence);
+      if (idx >= 0) {
+        const isExact = schedule[idx].stop_sequence === vehicle.currentStopSequence;
+        if (isExact && vehicle.currentStatus === "STOPPED_AT" && idx < schedule.length - 1) {
+          nextIdx = idx + 1;
+        } else {
+          nextIdx = idx;
+        }
+      }
+    }
+
+    // Method 2: GPS proximity fallback
+    if (nextIdx < 0 && vehicle.lat && vehicle.lon) {
+      let nearestIdx = 0;
+      let nearestDist = Infinity;
       for (let i = 0; i < schedule.length; i++) {
         const stop = stopById.get(schedule[i].stop_id);
         if (!stop) continue;
@@ -127,14 +152,13 @@ const BusPopup = ({
           nearestIdx = i;
         }
       }
+      nextIdx = nearestIdx;
+      if (nearestDist < 200 && nearestIdx < schedule.length - 1) {
+        nextIdx++;
+      }
     }
 
-    // If bus is within 200m of the nearest stop it's at or just past it;
-    // otherwise it's heading toward it.
-    let nextIdx = nearestIdx;
-    if (nearestDist < 200 && nearestIdx < schedule.length - 1) {
-      nextIdx++;
-    }
+    if (nextIdx < 0) nextIdx = 0;
 
     // If we're past all stops, show the last few
     if (nextIdx >= schedule.length) {
@@ -150,14 +174,19 @@ const BusPopup = ({
         stopLat: stop?.stop_lat ?? 0,
         stopLon: stop?.stop_lon ?? 0,
         scheduledTime: formatGtfsTime(row.arrival_time ?? row.departure_time),
+        rawTime: row.arrival_time ?? row.departure_time ?? null,
+        stopSequence: row.stop_sequence,
         isTerminal: row.stop_sequence === lastSeq,
       };
     });
-  }, [schedule, vehicle.lat, vehicle.lon, stopById]);
+  }, [schedule, vehicle.lat, vehicle.lon, vehicle.currentStopSequence, vehicle.currentStatus, stopById]);
 
-  const destination = nextStops.length > 0
-    ? nextStops[nextStops.length - 1]?.stopName ?? null
-    : null;
+  const destination = useMemo(() => {
+    if (schedule.length === 0) return null;
+    const lastRow = schedule[schedule.length - 1];
+    const stop = stopById.get(lastRow.stop_id);
+    return stop?.stop_name ?? null;
+  }, [schedule, stopById]);
 
   // Find the stop closest to user among upcoming stops
   const closestStopId = useMemo(() => {
@@ -175,6 +204,38 @@ const BusPopup = ({
     return bestId;
   }, [userLocation, nextStops]);
 
+  // Compute the effective delay:
+  // 1. From GTFS-RT trip update (first upcoming stop), most authoritative
+  // 2. Implied from schedule: if the next stop's scheduled time is in the past,
+  //    the bus is late by (now - scheduledTime) even without real-time data
+  const effectiveDelay = useMemo(() => {
+    if (tripDelay?.canceled) return tripDelay.delay;
+
+    // Try real-time data first
+    if (tripDelay) {
+      if (nextStops.length === 0) return tripDelay.delay;
+      for (const stop of nextStops) {
+        const su = tripDelay.stopUpdates.find(
+          (u) => u.stopSequence === stop.stopSequence || u.stopId === stop.stopId
+        );
+        const d = su?.arrivalDelay ?? su?.departureDelay ?? null;
+        if (d != null) return d;
+      }
+      return tripDelay.delay;
+    }
+
+    // No trip update — infer delay from schedule vs current time
+    if (nextStops.length === 0) return null;
+    const firstRaw = nextStops[0].rawTime;
+    if (!firstRaw) return null;
+    const scheduledSec = gtfsTimeToSeconds(firstRaw);
+    if (scheduledSec < 0) return null;
+    const implied = nowSeconds() - scheduledSec;
+    // Only report as delay if >30 seconds behind schedule
+    if (implied > 30) return implied;
+    return null;
+  }, [tripDelay, nextStops]);
+
   return (
     <div>
       <h3 className="font-semibold text-sm">{strings.line} {vehicle.lineNumber}</h3>
@@ -182,18 +243,23 @@ const BusPopup = ({
         <p className="text-xs text-muted-foreground mt-0.5">{strings.headingTo(destination)}</p>
       ) : null}
 
-      {distToVehicle !== null && walkTimeMin !== null && runTimeMin !== null && (
-        <div className="mt-2 pt-2 border-t text-xs">
-          <p className="font-medium mb-0.5">
-            {strings.distance}: {distToVehicle < 1000
-              ? `${Math.round(distToVehicle)} m`
-              : `${(distToVehicle / 1000).toFixed(1)} km`}
-          </p>
-          <p className="text-muted-foreground">
-            🚶 {formatDuration(walkTimeMin)} · 🏃 {formatDuration(runTimeMin)}
-          </p>
+      {tripDelay?.canceled ? (
+        <div className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-destructive">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span>{strings.tripCanceled}</span>
         </div>
-      )}
+      ) : effectiveDelay != null && Math.abs(effectiveDelay) >= 30 ? (
+        <div className={`mt-1.5 flex items-center gap-1.5 text-xs font-medium ${effectiveDelay > 0 ? "text-orange-600" : "text-green-600"}`}>
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span>
+            {effectiveDelay > 0
+              ? strings.delayedBy(formatDuration(effectiveDelay / 60))
+              : strings.aheadOfSchedule(formatDuration(Math.abs(effectiveDelay) / 60))}
+          </span>
+        </div>
+      ) : effectiveDelay != null && Math.abs(effectiveDelay) < 30 ? (
+        <p className="mt-1 text-xs text-green-600">{strings.onTime}</p>
+      ) : null}
 
       {loadingStops ? (
         <div className="mt-2 pt-2 border-t flex items-center gap-2 text-xs text-muted-foreground">
@@ -212,6 +278,19 @@ const BusPopup = ({
                     ? "text-green-600"
                     : "text-muted-foreground";
               const nameClass = stop.isTerminal ? "font-semibold" : "";
+
+              // Per-stop delay: use real-time data if available, else effective delay
+              const stopUpdate = tripDelay?.stopUpdates.find(
+                (su) => su.stopSequence === stop.stopSequence || su.stopId === stop.stopId
+              );
+              const perStopDelay = stopUpdate?.arrivalDelay ?? stopUpdate?.departureDelay ?? null;
+              // Use per-stop real-time delay, or fall back to the effective (possibly implied) delay
+              const delaySec = perStopDelay ?? (effectiveDelay != null && effectiveDelay > 30 ? effectiveDelay : null);
+              const hasDelay = delaySec != null && Math.abs(delaySec) >= 30;
+              const expectedTime = hasDelay
+                ? computeExpectedTime(stop.rawTime, delaySec)
+                : stop.scheduledTime;
+
               return (
                 <div key={index} className="flex items-center gap-1.5 text-xs">
                   {isClosest ? (
@@ -220,8 +299,8 @@ const BusPopup = ({
                     <MapPin className={`h-3 w-3 shrink-0 ${iconColor}`} />
                   )}
                   <span className={`flex-1 truncate ${nameClass}`}>{stop.stopName}</span>
-                  {stop.scheduledTime ? (
-                    <span className="text-muted-foreground shrink-0">{stop.scheduledTime}</span>
+                  {expectedTime ? (
+                    <span className="shrink-0 font-medium text-muted-foreground">{expectedTime}</span>
                   ) : null}
                 </div>
               );

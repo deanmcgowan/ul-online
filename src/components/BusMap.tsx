@@ -1,5 +1,4 @@
 import { useRef, useEffect, useState, useCallback, useMemo, lazy, Suspense } from "react";
-import { createPortal } from "react-dom";
 import Map from "ol/Map";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
@@ -17,7 +16,8 @@ import {
   Icon,
   Circle as CircleStyle,
 } from "ol/style";
-import Overlay from "ol/Overlay";
+import type { TripDelay } from "@/hooks/useTripUpdates";
+import BottomSheet from "@/components/BottomSheet";
 import ClusterSource from "ol/source/Cluster";
 import { circular } from "ol/geom/Polygon";
 import { boundingExtent } from "ol/extent";
@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import StopPopup from "@/components/StopPopup";
 import { buildStopGroups, findStopGroupForStop, type TransitStopGroup } from "@/lib/stopGroups";
+import { defaults as defaultControls } from "ol/control";
 import "ol/ol.css";
 
 const BusPopup = lazy(() => import("@/components/BusPopup"));
@@ -125,6 +126,7 @@ interface BusMapProps {
   walkSpeed: number;
   runSpeed: number;
   bufferMinutes: number;
+  maxWalkDistanceMeters: number;
   filteredStop: TransitStopGroup | null;
   onStopClick: (stopGroup: TransitStopGroup) => void;
   onBusClick: (vehicle: Vehicle & { lineNumber: string }) => void;
@@ -134,6 +136,7 @@ interface BusMapProps {
   stopVisibilityZoom?: number;
   stopRoutes?: Record<string, string[]>;
   highlightedStop?: TransitStop | null;
+  tripDelayMap?: Map<string, TripDelay>;
 }
 
 const BusMap = ({
@@ -144,6 +147,7 @@ const BusMap = ({
   walkSpeed,
   runSpeed,
   bufferMinutes,
+  maxWalkDistanceMeters,
   filteredStop,
   onStopClick,
   onBusClick,
@@ -153,18 +157,13 @@ const BusMap = ({
   stopVisibilityZoom = 14,
   stopRoutes = {},
   highlightedStop = null,
+  tripDelayMap,
 }: BusMapProps) => {
   const { strings } = useAppPreferences();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<Map | null>(null);
-  const overlayRef = useRef<Overlay | null>(null);
   const stopRenderFrameRef = useRef<number | null>(null);
   const stopRenderTokenRef = useRef(0);
-  const [popupEl] = useState(() => {
-    const el = document.createElement("div");
-    el.className = "ol-popup-container";
-    return el;
-  });
 
   const vehicleSourceRef = useRef(new VectorSource());
   const stopsRawSourceRef = useRef(new VectorSource());
@@ -308,15 +307,9 @@ const BusMap = ({
       zIndex: 20,
     });
 
-    const overlay = new Overlay({
-      element: popupEl,
-      positioning: "bottom-center",
-      offset: [0, -15],
-    });
-    overlayRef.current = overlay;
-
     const map = new Map({
       target: mapContainerRef.current,
+      controls: defaultControls({ zoom: false }),
       layers: [
         new TileLayer({ source: new OSM() }),
         bufferLayer,
@@ -324,7 +317,6 @@ const BusMap = ({
         vehicleLayer,
         userLayer,
       ],
-      overlays: [overlay],
       view: new View({
         center: fromLonLat([17.63, 59.86]),
         zoom: 13,
@@ -359,12 +351,13 @@ const BusMap = ({
               delete props.geometry;
               const busCoord = fromLonLat([props.lon, props.lat]);
               setPopup({ type: "bus", data: props });
-              overlay.setPosition(busCoord);
-              // Center the bus in the lower third of the map so the popup
-              // (which extends upward) has room above.
+              // Center the bus away from the panel: upper half on mobile, right half on desktop
               const mapSize = map.getSize();
               if (mapSize) {
-                const targetPixel = [mapSize[0] / 2, mapSize[1] * 0.65];
+                const isWide = mapSize[0] >= 768;
+                const targetPixel = isWide
+                  ? [(mapSize[0] + 352) / 2, mapSize[1] / 2]  // offset right for 22rem left panel
+                  : [mapSize[0] / 2, mapSize[1] * 0.35];      // offset up for bottom sheet
                 const busPixel = map.getPixelFromCoordinate(busCoord);
                 if (busPixel) {
                   const currentCenter = map.getView().getCenter()!;
@@ -426,7 +419,6 @@ const BusMap = ({
                     routeIds: Array.from(allRouteIds).sort(),
                   };
                   setPopup({ type: "stop", data: merged });
-                  overlay.setPosition(e.coordinate);
                   handled = true;
                   return;
                 }
@@ -452,7 +444,6 @@ const BusMap = ({
             }
 
             setPopup({ type: "stop", data: stopGroup });
-            overlay.setPosition(e.coordinate);
             handled = true;
           },
           { layerFilter: (l) => l === stopsLayer }
@@ -461,7 +452,6 @@ const BusMap = ({
 
       if (!handled) {
         setPopup(null);
-        overlay.setPosition(undefined);
       }
     });
 
@@ -656,7 +646,7 @@ const BusMap = ({
   }, [userLocation, walkSpeed, runSpeed, bufferMinutes]);
 
   useEffect(() => {
-    if (!highlightedStop || !mapRef.current || !overlayRef.current) {
+    if (!highlightedStop || !mapRef.current) {
       return;
     }
 
@@ -667,7 +657,6 @@ const BusMap = ({
 
     const coordinate = fromLonLat([highlightedGroup.stop_lon, highlightedGroup.stop_lat]);
     setPopup({ type: "stop", data: highlightedGroup });
-    overlayRef.current.setPosition(coordinate);
     mapRef.current.getView().animate({
       center: coordinate,
       zoom: Math.max(mapRef.current.getView().getZoom() ?? 13, 15),
@@ -686,179 +675,75 @@ const BusMap = ({
     return { ...updated, lineNumber: orig.lineNumber };
   }, [popup, vehicles]);
 
-  // Track the live bus position: move overlay + shift map so popup stays stable.
-  // Uses a ref to compare previous position, avoiding state updates entirely.
-  const prevBusPosRef = useRef<{ lat: number; lon: number } | null>(null);
+  // Track the live bus position: smoothly center the map so the bus stays
+  // visible away from the panel.
   useEffect(() => {
-    if (!liveVehicle || !mapRef.current || !overlayRef.current) {
-      prevBusPosRef.current = null;
-      return;
-    }
+    if (!liveVehicle || !mapRef.current) return;
 
     const map = mapRef.current;
-    const overlay = overlayRef.current;
-    const newCoord = fromLonLat([liveVehicle.lon, liveVehicle.lat]);
-    const prev = prevBusPosRef.current;
+    const coord = fromLonLat([liveVehicle.lon, liveVehicle.lat]);
+    const mapSize = map.getSize();
+    if (!mapSize) return;
 
-    if (prev && (prev.lat !== liveVehicle.lat || prev.lon !== liveVehicle.lon)) {
-      const oldCoord = fromLonLat([prev.lon, prev.lat]);
-      const oldPx = map.getPixelFromCoordinate(oldCoord);
-      const newPx = map.getPixelFromCoordinate(newCoord);
-      if (oldPx && newPx) {
-        const dx = newPx[0] - oldPx[0];
-        const dy = newPx[1] - oldPx[1];
-        if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
-          const centerPx = map.getPixelFromCoordinate(map.getView().getCenter()!);
-          if (centerPx) {
-            const newCenter = map.getCoordinateFromPixel([centerPx[0] + dx, centerPx[1] + dy]);
-            if (newCenter) map.getView().setCenter(newCenter);
-          }
-        }
+    const isWide = mapSize[0] >= 768;
+    const targetPixel = isWide
+      ? [(mapSize[0] + 352) / 2, mapSize[1] / 2]
+      : [mapSize[0] / 2, mapSize[1] * 0.35];
+    const busPixel = map.getPixelFromCoordinate(coord);
+    if (!busPixel) return;
+
+    const currentCenter = map.getView().getCenter();
+    if (!currentCenter) return;
+    const centerPixel = map.getPixelFromCoordinate(currentCenter);
+    if (!centerPixel) return;
+
+    const dx = busPixel[0] - targetPixel[0];
+    const dy = busPixel[1] - targetPixel[1];
+
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+      const newCenter = map.getCoordinateFromPixel([centerPixel[0] + dx, centerPixel[1] + dy]);
+      if (newCenter) {
+        map.getView().animate({ center: newCenter, duration: 500 });
       }
     }
-
-    overlay.setPosition(newCoord);
-    prevBusPosRef.current = { lat: liveVehicle.lat, lon: liveVehicle.lon };
   }, [liveVehicle?.lat, liveVehicle?.lon]);
 
-  // After a popup opens, pan the map so the full popup is visible.
-  // Uses ResizeObserver to re-pan when the popup grows (e.g. async data loads).
-  // Depends on a stable key so it only runs when a NEW popup opens, not on
-  // every liveVehicle position update.
-  const popupKey = popup
-    ? `${popup.type}-${popup.type === "bus" ? (popup.data as Vehicle).id : "stop"}`
-    : null;
-  useEffect(() => {
-    if (!popup || !mapRef.current || !overlayRef.current) return;
-
-    const map = mapRef.current;
-    const overlay = overlayRef.current;
-    const isBus = popup.type === "bus";
-
-    function panToFitPopup() {
-      const el = overlay.getElement();
-      const anchorPos = overlay.getPosition();
-      if (!el || !anchorPos) return;
-
-      // Measure the actual content child, not the portal container
-      const content = el.firstElementChild as HTMLElement | null;
-      if (!content) return;
-
-      const mapSize = map.getSize();
-      if (!mapSize) return;
-
-      const [mapW, mapH] = mapSize;
-
-      const contentRect = content.getBoundingClientRect();
-      const mapRect = map.getTargetElement()!.getBoundingClientRect();
-
-      // Convert popup's viewport-relative rect to map-relative pixels
-      const popupTop = contentRect.top - mapRect.top;
-      const popupLeft = contentRect.left - mapRect.left;
-      const popupRight = contentRect.right - mapRect.left;
-      const popupBottom = contentRect.bottom - mapRect.top;
-
-      const margin = 12;
-      let dx = 0;
-      let dy = 0;
-
-      if (popupTop - margin < 0) dy = popupTop - margin;
-      if (popupBottom + margin > mapH) dy = popupBottom + margin - mapH;
-      if (popupLeft - margin < 0) dx = popupLeft - margin;
-      if (popupRight + margin > mapW) dx = popupRight + margin - mapW;
-
-      if (dx !== 0 || dy !== 0) {
-        const currentCenter = map.getView().getCenter();
-        if (!currentCenter) return;
-        const currentPixel = map.getPixelFromCoordinate(currentCenter);
-        if (!currentPixel) return;
-        const newCenter = map.getCoordinateFromPixel([
-          currentPixel[0] + dx,
-          currentPixel[1] + dy,
-        ]);
-        if (newCenter) {
-          // For bus popups use instant correction to avoid fighting the centering animation
-          if (isBus) {
-            map.getView().setCenter(newCenter);
-          } else {
-            map.getView().animate({ center: newCenter, duration: 250 });
-          }
-        }
-      }
-    }
-
-    // Observe the portal container's subtree for size changes
-    const el = overlay.getElement();
-    if (!el) return;
-
-    const observer = new ResizeObserver(() => panToFitPopup());
-    // Observe the content child once it appears
-    const content = el.firstElementChild as HTMLElement | null;
-    if (content) {
-      observer.observe(content);
-    }
-    // Also observe container in case child mounts later
-    observer.observe(el);
-
-    // For bus popups, delay initial pan to let centering animation finish
-    const delay = isBus ? 450 : 0;
-    let frameId: number | undefined;
-    const timerId = window.setTimeout(() => {
-      frameId = requestAnimationFrame(() => panToFitPopup());
-    }, delay);
-
-    return () => {
-      window.clearTimeout(timerId);
-      if (frameId !== undefined) cancelAnimationFrame(frameId);
-      observer.disconnect();
-    };
-  }, [popupKey]);
-
-  const popupContent = popup ? (
-    <div className="bg-background rounded-lg shadow-lg border p-3 min-w-[200px] max-w-[280px] relative">
-      {popup.type === "stop" ? (
-        <StopPopup
-          stopGroup={popup.data as TransitStopGroup}
-          stops={stops}
-          vehicles={vehicles}
-          routeMap={routeMap}
-          stopRoutes={stopRoutes}
-          isFavorite={isFavorite}
-          onToggleFavorite={onToggleFavorite}
-          onFilter={(selectedStopGroup) => {
-            onStopClick(selectedStopGroup);
-            setPopup(null);
-            overlayRef.current?.setPosition(undefined);
-          }}
-        />
-      ) : liveVehicle ? (
-        <Suspense fallback={<div className="text-xs text-muted-foreground">{strings.loadingBusDetails}</div>}>
-          <BusPopup
-            vehicle={liveVehicle}
-            userLocation={userLocation}
-            walkSpeed={walkSpeed}
-            runSpeed={runSpeed}
-            stops={stops}
-            routeMap={routeMap}
-          />
-        </Suspense>
-      ) : null}
-      <button
-        className="absolute top-1 right-2 text-muted-foreground hover:text-foreground text-lg leading-none"
-        onClick={() => {
-          setPopup(null);
-          overlayRef.current?.setPosition(undefined);
-        }}
-      >
-        ×
-      </button>
-    </div>
-  ) : null;
+  const closePopup = useCallback(() => setPopup(null), []);
 
   return (
     <>
       <div ref={mapContainerRef} className="w-full h-full" />
-      {createPortal(popupContent, popupEl)}
+      <BottomSheet open={popup !== null} onClose={closePopup}>
+        {popup?.type === "stop" ? (
+          <StopPopup
+            stopGroup={popup.data as TransitStopGroup}
+            stops={stops}
+            vehicles={vehicles}
+            routeMap={routeMap}
+            stopRoutes={stopRoutes}
+            userLocation={userLocation}
+            walkSpeed={walkSpeed}
+            runSpeed={runSpeed}
+            maxWalkDistanceMeters={maxWalkDistanceMeters}
+            isFavorite={isFavorite}
+            onToggleFavorite={onToggleFavorite}
+            onFilter={(selectedStopGroup) => {
+              onStopClick(selectedStopGroup);
+              setPopup(null);
+            }}
+          />
+        ) : liveVehicle ? (
+          <Suspense fallback={<div className="text-xs text-muted-foreground">{strings.loadingBusDetails}</div>}>
+            <BusPopup
+              vehicle={liveVehicle}
+              userLocation={userLocation}
+              stops={stops}
+              routeMap={routeMap}
+              tripDelay={tripDelayMap?.get(liveVehicle.tripId) ?? null}
+            />
+          </Suspense>
+        ) : null}
+      </BottomSheet>
     </>
   );
 };

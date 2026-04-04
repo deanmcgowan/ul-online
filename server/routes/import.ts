@@ -46,10 +46,16 @@ function simpleHash(str: string): string {
 
 export const importRoute = new Hono();
 
-importRoute.post("/", async (c) => {
+export async function runGtfsImport(): Promise<{
+  success: boolean;
+  stops_imported: number;
+  routes_imported: number;
+  stop_routes_imported: number;
+  hash: string;
+}> {
   const apiKey = process.env.TRAFIKLAB_SWEDEN3_STATIC_KEY;
   if (!apiKey) {
-    return c.json({ error: "Sweden 3 Static API key not configured" }, 500);
+    throw new Error("Sweden 3 Static API key not configured");
   }
 
   const db = getDb();
@@ -58,10 +64,7 @@ importRoute.post("/", async (c) => {
   console.log("Downloading GTFS Sweden 3 UL data...");
   const response = await fetch(url);
   if (!response.ok) {
-    return c.json(
-      { error: `GTFS download failed: ${response.status} ${response.statusText}` },
-      response.status as 400
-    );
+    throw new Error(`GTFS download failed: ${response.status} ${response.statusText}`);
   }
 
   const zipBuffer = await response.arrayBuffer();
@@ -253,11 +256,20 @@ importRoute.post("/", async (c) => {
     `Import complete: ${stopsCount} stops, ${routes.length} routes, ${stopRoutesCount} stop_routes, hash: ${combinedHash}`
   );
 
-  return c.json({
+  return {
     success: true,
     stops_imported: stopsCount,
     routes_imported: routes.length,
     stop_routes_imported: stopRoutesCount,
     hash: combinedHash,
-  });
+  };
+}
+
+importRoute.post("/", async (c) => {
+  try {
+    const result = await runGtfsImport();
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
 });

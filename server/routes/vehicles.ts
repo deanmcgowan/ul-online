@@ -117,7 +117,7 @@ vehiclesRoute.post("/", async (c) => {
   const feedObj = FeedMessage.toObject(feed, { longs: Number, defaults: true }) as Record<string, any>;
 
   const vehicles = ((feedObj.entity || []) as any[])
-    .filter((e: any) => e.vehicle && e.vehicle.position)
+    .filter((e: any) => e.vehicle && e.vehicle.position && e.vehicle.trip?.tripId)
     .map((e: any) => ({
       id: e.id,
       tripId: e.vehicle.trip?.tripId || "",

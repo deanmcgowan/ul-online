@@ -132,6 +132,14 @@ export interface AppStrings {
   commuteRiskAlertWithFallback: (origin: string, destination: string, lineNumber: string, fallbackLine: string) => string;
   nextStops: string;
   noResults: string;
+  tripCanceled: string;
+  delayedBy: (duration: string) => string;
+  aheadOfSchedule: (duration: string) => string;
+  onTime: string;
+  minutesLate: (n: number) => string;
+  minutesEarly: (n: number) => string;
+  serviceAlerts: string;
+  serviceAlertCount: (count: number) => string;
 }
 
 const STRINGS: Record<SupportedLanguage, AppStrings> = {
@@ -265,6 +273,14 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     commuteRiskAlertWithFallback: (origin, destination, lineNumber, fallbackLine) => `${origin} to ${destination} is tight for line ${lineNumber}. Line ${fallbackLine} is the safer fallback.`,
     nextStops: "Next stops",
     noResults: "No information available.",
+    tripCanceled: "This trip is cancelled",
+    delayedBy: (duration) => `Delayed ${duration}`,
+    aheadOfSchedule: (duration) => `${duration} ahead`,
+    onTime: "On time",
+    minutesLate: (n) => `${n} min late`,
+    minutesEarly: (n) => `${n} min early`,
+    serviceAlerts: "Service alerts",
+    serviceAlertCount: (count) => `${count} active alert${count !== 1 ? "s" : ""}`,
   },
   "sv-SE": {
     appTitle: "UL Busskarta",
@@ -396,6 +412,14 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     commuteRiskAlertWithFallback: (origin, destination, lineNumber, fallbackLine) => `Resan från ${origin} till ${destination} är tajt för linje ${lineNumber}. Linje ${fallbackLine} är ett säkrare reservval.`,
     nextStops: "Nästa hållplatser",
     noResults: "Ingen information tillgänglig.",
+    tripCanceled: "Turen är inställd",
+    delayedBy: (duration) => `Försenad ${duration}`,
+    aheadOfSchedule: (duration) => `${duration} före tidtabell`,
+    onTime: "I tid",
+    minutesLate: (n) => `${n} min sen`,
+    minutesEarly: (n) => `${n} min tidig`,
+    serviceAlerts: "Trafikstörningar",
+    serviceAlertCount: (count) => `${count} aktiv${count !== 1 ? "a" : ""} störning${count !== 1 ? "ar" : ""}`,
   },
 };
 

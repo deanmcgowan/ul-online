@@ -133,4 +133,47 @@ describe("buildStopGroups", () => {
     const northPlat = platforms.find((p) => p.stops.some((s) => s.stop_id.includes("north") || s.stop_id.endsWith("-n")));
     expect(northPlat?.stops).toHaveLength(2);
   });
+
+  it("does not merge nearby stops with similar names but disjoint routes", () => {
+    const stopA = createStop({
+      stop_id: "barby-gatan",
+      stop_name: "Uppsala Bärbygatan",
+      stop_lat: 59.8700,
+      stop_lon: 17.6300,
+    });
+    const stopB = createStop({
+      stop_id: "barby-leden",
+      stop_name: "Uppsala Bärbyleden",
+      stop_lat: 59.8706,
+      stop_lon: 17.6300,
+    });
+
+    const groups = buildStopGroups([stopA, stopB], {
+      "barby-gatan": ["8"],
+      "barby-leden": ["3", "11", "14"],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.find((g) => g.stops.some((s) => s.stop_id === "barby-gatan"))?.routeIds).toEqual(["8"]);
+    expect(groups.find((g) => g.stops.some((s) => s.stop_id === "barby-leden"))?.routeIds).toEqual(["3", "11", "14"]);
+  });
+
+  it("still merges nearby stops with disjoint routes when route data is missing", () => {
+    const stopA = createStop({
+      stop_id: "barby-gatan",
+      stop_name: "Uppsala Bärbygatan",
+      stop_lat: 59.8700,
+      stop_lon: 17.6300,
+    });
+    const stopB = createStop({
+      stop_id: "barby-gatan-s",
+      stop_name: "Uppsala Bärbygatan",
+      stop_lat: 59.87005,
+      stop_lon: 17.63005,
+    });
+
+    const groups = buildStopGroups([stopA, stopB], {});
+
+    expect(groups).toHaveLength(1);
+  });
 });

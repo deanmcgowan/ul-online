@@ -10,7 +10,9 @@ import { staticDataRoute } from "./routes/static-data.js";
 import { vehiclesRoute } from "./routes/vehicles.js";
 import { situationsRoute } from "./routes/situations.js";
 import { stopTimesRoute } from "./routes/stop-times.js";
-import { importRoute } from "./routes/import.js";
+import { tripUpdatesRoute } from "./routes/trip-updates.js";
+import { serviceAlertsRoute } from "./routes/service-alerts.js";
+import { importRoute, runGtfsImport } from "./routes/import.js";
 import { getDb } from "./db.js";
 
 const app = new Hono();
@@ -23,6 +25,8 @@ app.route("/api/static-data", staticDataRoute);
 app.route("/api/vehicles", vehiclesRoute);
 app.route("/api/situations", situationsRoute);
 app.route("/api/stop-times", stopTimesRoute);
+app.route("/api/trip-updates", tripUpdatesRoute);
+app.route("/api/service-alerts", serviceAlertsRoute);
 app.route("/api/import", importRoute);
 
 // Health check
@@ -67,6 +71,15 @@ if (!fs.existsSync(dbDir)) {
 
 // Ensure DB is initialized on startup
 getDb();
+
+// Auto-import GTFS data if the DB is empty (e.g. fresh Cloud Run revision)
+const stopsCount = getDb().prepare("SELECT COUNT(*) AS n FROM transit_stops").get() as { n: number };
+if (stopsCount.n === 0) {
+  console.log("Empty database detected — running GTFS import on startup...");
+  runGtfsImport()
+    .then((result) => console.log("Startup import complete:", result))
+    .catch((err) => console.error("Startup import failed:", err));
+}
 
 const port = parseInt(process.env.PORT || "3000", 10);
 

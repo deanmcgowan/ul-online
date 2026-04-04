@@ -60,3 +60,42 @@ export function fetchStopTimesMulti(tripIds: string[]) {
     { tripIds }
   );
 }
+
+/** Fetch GTFS-RT trip updates (real-time delays) */
+export function fetchTripUpdates() {
+  return post<{
+    tripUpdates: {
+      tripId: string;
+      routeId: string;
+      directionId: number;
+      canceled: boolean;
+      delay: number | null;
+      stopUpdates: {
+        stopId: string;
+        stopSequence: number;
+        arrivalDelay: number | null;
+        departureDelay: number | null;
+      }[];
+    }[];
+    timestamp: number;
+  }>("/trip-updates");
+}
+
+/** Fetch GTFS-RT service alerts */
+export function fetchServiceAlerts(language?: string) {
+  return post<{
+    alerts: {
+      id: string;
+      header: string;
+      description: string;
+      url: string;
+      cause: string;
+      effect: string;
+      routeIds: string[];
+      stopIds: string[];
+      tripIds: string[];
+      activePeriods: { start: number; end: number }[];
+    }[];
+    timestamp: number;
+  }>("/service-alerts", language ? { language } : undefined);
+}

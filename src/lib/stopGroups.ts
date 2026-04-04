@@ -152,6 +152,29 @@ function getSharedTokenCount(left: string, right: string) {
   return shared;
 }
 
+function hasRouteOverlap(
+  stop: TransitStop,
+  candidate: TransitStop,
+  stopRoutes: Record<string, string[]>,
+): boolean {
+  const leftRoutes = stopRoutes[stop.stop_id];
+  const rightRoutes = stopRoutes[candidate.stop_id];
+
+  if (!leftRoutes?.length || !rightRoutes?.length) {
+    return true;
+  }
+
+  const rightSet = new Set(rightRoutes);
+  return leftRoutes.some((route) => rightSet.has(route));
+}
+
+function isStrongNameMatch(stop: TransitStop, candidate: TransitStop): boolean {
+  const leftTokens = normalizeStopName(stop.stop_name);
+  const rightTokens = normalizeStopName(candidate.stop_name);
+  const shared = getSharedTokenCount(stop.stop_name, candidate.stop_name);
+  return shared >= Math.min(leftTokens.length, rightTokens.length);
+}
+
 function isSameVisualStopGroup(stop: TransitStop, candidate: TransitStop): boolean {
   if (candidate.stop_id === stop.stop_id) {
     return true;
@@ -197,7 +220,11 @@ export function buildStopGroups(
         const neighborIndexes = cells.get(neighborKey) ?? [];
 
         for (const neighborIndex of neighborIndexes) {
-          if (isSameVisualStopGroup(stop, stops[neighborIndex])) {
+          if (
+            isSameVisualStopGroup(stop, stops[neighborIndex]) &&
+            (isStrongNameMatch(stop, stops[neighborIndex]) ||
+              hasRouteOverlap(stop, stops[neighborIndex], stopRoutes))
+          ) {
             unionRoots(parent, rank, index, neighborIndex);
           }
         }
