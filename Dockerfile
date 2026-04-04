@@ -8,21 +8,39 @@ RUN npm ci --no-fund --no-audit
 
 COPY . .
 
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_PUBLISHABLE_KEY
-
-ENV VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
-ENV VITE_SUPABASE_PUBLISHABLE_KEY=${VITE_SUPABASE_PUBLISHABLE_KEY}
-
+# Build the Vite frontend
 RUN npm run build
 
-FROM nginx:1.27-alpine AS runtime
+# Compile the server TypeScript
+RUN npx tsc -p tsconfig.server.json
 
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+# ── Production image ─────────────────────────────────────────
+FROM node:22-alpine AS runtime
+
+RUN apk add --no-cache tini
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --no-fund --no-audit --omit=dev
+
+# Copy built frontend
+COPY --from=build /app/dist ./dist
+
+# Copy compiled server
+COPY --from=build /app/dist-server ./dist-server
+
+# Data directory for SQLite (use a volume in Cloud Run)
+RUN mkdir -p /app/data
+
+ENV NODE_ENV=production
+ENV PORT=8080
+ENV DB_PATH=/app/data/gtfs.db
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8080/api/health >/dev/null || exit 1
 
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "dist-server/index.js"]

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import BusMap, { Vehicle, TransitStop } from "@/components/BusMap";
 import CommuteDashboard from "@/components/CommuteDashboard";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
-import { supabase } from "@/integrations/supabase/client";
+import { fetchVehicles } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { useCommutePlans, getTrafficQueryForPlan } from "@/hooks/useCommutePlans";
 import { useRoadSituations } from "@/hooks/useRoadSituations";
@@ -113,7 +113,6 @@ const Index = () => {
     runSpeed,
     bufferMinutes,
     maxWalkDistanceMeters,
-    showSkolskjuts,
     highAccuracyLocation,
     stopVisibilityZoom,
   } = preferences;
@@ -226,9 +225,9 @@ const Index = () => {
       }
 
       try {
-        const { data, error } = await supabase.functions.invoke("trafiklab-vehicles");
+        const { data, error } = await fetchVehicles();
         if (error) throw error;
-        if (data?.vehicles) setVehicles(data.vehicles);
+        if (data?.vehicles) setVehicles(data.vehicles as Vehicle[]);
         setLastRefresh(Date.now());
         scheduleNextRun(ACTIVE_VEHICLE_REFRESH_MS);
       } catch (error) {
@@ -424,7 +423,6 @@ const Index = () => {
         onMapReady={setMapInstance}
         isFavorite={isFavorite}
         onToggleFavorite={handleToggleFavorite}
-        showSkolskjuts={showSkolskjuts}
         stopVisibilityZoom={stopVisibilityZoom}
         stopRoutes={stopRoutes}
         highlightedStop={highlightedCommuteStop}

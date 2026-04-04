@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Star } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { fetchStopTimesMulti } from "@/lib/api";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { Button } from "@/components/ui/button";
 import type { TransitStop, Vehicle } from "@/components/BusMap";
 import { bearingTowardStop } from "@/lib/busIcon";
 import { buildPlatformGroups, type TransitPlatformGroup, type TransitStopGroup } from "@/lib/stopGroups";
 import { haversineDistanceMeters, pickBestUpcomingStopMatch, type StopTimeMatch } from "@/lib/transitMatching";
-import { buildTripScheduleMap, estimateRemainingTripSeconds, getTripTerminalStopId, parseGtfsTimeToSeconds, type ScheduledStopTimeRow } from "@/lib/tripSchedules";
+import { buildTripScheduleMap, estimateRemainingTripSeconds, getTripTerminalStopId, inferEffectiveStopSequence, parseGtfsTimeToSeconds, type ScheduledStopTimeRow } from "@/lib/tripSchedules";
 
 export { pickBestUpcomingStopMatch } from "@/lib/transitMatching";
 
@@ -28,6 +28,7 @@ interface ArrivalCandidate {
   stopLat: number;
   stopLon: number;
   stopSequence: number;
+  effectiveStopSequence: number;
   lineNumber: string;
   isExactStop: boolean;
   isTowardStop: boolean;
@@ -55,17 +56,16 @@ const SAME_TRIP_CONTINUITY_BONUS_SECONDS = 75;
 const MAX_SAME_TRIP_INCREASE_SECONDS = 45;
 const FALLBACK_MAX_DISTANCE_METERS = 5000;
 const FALLBACK_ALLOW_NON_APPROACHING_ETA_SECONDS = 300;
-const LIVE_PROXIMITY_OVERRIDE_DISTANCE_METERS = 300;
-const LIVE_PROXIMITY_OVERRIDE_SEQUENCE_GRACE = 2;
+const ROAD_DISTANCE_FACTOR = 1.4;
+const STOPPED_AT_DWELL_SECONDS = 25;
+const NEARBY_STOP_MATCH_RADIUS_METERS = 150;
 
 function formatEta(seconds: number, arrivingNow: string): string {
-  const adjustedSeconds = Math.max(0, seconds - 60);
-
-  if (adjustedSeconds < 60) {
+  if (seconds < 45) {
     return arrivingNow;
   }
 
-  return `${Math.max(1, Math.floor(adjustedSeconds / 60))} min`;
+  return `${Math.max(1, Math.round(seconds / 60))} min`;
 }
 
 function formatArrivalStatus(seconds: number, strings: ReturnType<typeof useAppPreferences>["strings"]) {
@@ -124,12 +124,13 @@ function getSiblingPenaltySeconds(candidate: ArrivalCandidate, selectedStop: Tra
 }
 
 function getLiveApproachEtaSeconds(candidate: ArrivalCandidate, selectedStop: TransitStop) {
-  const routeDistance = haversineDistanceMeters(
+  const straightLineDistance = haversineDistanceMeters(
     candidate.vehicle.lat,
     candidate.vehicle.lon,
     candidate.stopLat,
     candidate.stopLon,
   );
+  const routeDistance = straightLineDistance * ROAD_DISTANCE_FACTOR;
   const assumedSpeed = Math.max(candidate.vehicle.speed || 0, 4);
   const driveSeconds = routeDistance / assumedSpeed;
   const headingPenaltySeconds = candidate.isTowardStop ? 0 : 90;
@@ -140,31 +141,17 @@ function getLiveApproachEtaSeconds(candidate: ArrivalCandidate, selectedStop: Tr
 function getApproximateEtaSeconds(candidate: ArrivalCandidate, selectedStop: TransitStop): number {
   const siblingPenaltySeconds = getSiblingPenaltySeconds(candidate, selectedStop);
   const liveApproachEtaSeconds = getLiveApproachEtaSeconds(candidate, selectedStop);
+  const intermediateStops = Math.max(0, candidate.stopSequence - candidate.effectiveStopSequence - 1);
+  const dwellPenaltySeconds = intermediateStops * 20;
+  const stoppedAtPenalty = candidate.vehicle.currentStatus === "STOPPED_AT" ? STOPPED_AT_DWELL_SECONDS : 0;
+  const liveEtaWithDwell = liveApproachEtaSeconds + dwellPenaltySeconds + stoppedAtPenalty;
 
   if (candidate.scheduledTravelSeconds !== null) {
-    const routeDistance = haversineDistanceMeters(
-      candidate.vehicle.lat,
-      candidate.vehicle.lon,
-      candidate.stopLat,
-      candidate.stopLon,
-    );
-    const sequenceDelta = Math.max(0, candidate.stopSequence - candidate.vehicle.currentStopSequence);
-    const scheduledEtaSeconds = Math.round(candidate.scheduledTravelSeconds + siblingPenaltySeconds);
-
-    if (
-      routeDistance <= LIVE_PROXIMITY_OVERRIDE_DISTANCE_METERS &&
-      sequenceDelta <= LIVE_PROXIMITY_OVERRIDE_SEQUENCE_GRACE
-    ) {
-      return Math.min(scheduledEtaSeconds, liveApproachEtaSeconds);
-    }
-
-    return scheduledEtaSeconds;
+    const scheduledEtaSeconds = Math.round(candidate.scheduledTravelSeconds + siblingPenaltySeconds + stoppedAtPenalty);
+    return Math.min(scheduledEtaSeconds, liveEtaWithDwell);
   }
 
-  const intermediateStops = Math.max(0, candidate.stopSequence - candidate.vehicle.currentStopSequence - 1);
-  const dwellPenaltySeconds = intermediateStops * 20;
-
-  return Math.round(liveApproachEtaSeconds + dwellPenaltySeconds);
+  return Math.round(liveEtaWithDwell);
 }
 
 function getClosestPlatformStop(platform: TransitPlatformGroup, vehicle: Vehicle) {
@@ -189,7 +176,21 @@ export function buildFallbackArrivalEstimate(
   }
 
   const candidates = vehicles
-    .filter((vehicle) => vehicle.tripId && platformRouteIds.has(vehicle.routeId))
+    .filter((vehicle) => {
+      if (!vehicle.tripId || !platformRouteIds.has(vehicle.routeId)) {
+        return false;
+      }
+
+      const tripRows = tripScheduleMap?.get(vehicle.tripId) ?? [];
+      if (tripRows.length > 0) {
+        const lastSequence = tripRows[tripRows.length - 1].stop_sequence;
+        if (vehicle.currentStopSequence >= lastSequence) {
+          return false;
+        }
+      }
+
+      return true;
+    })
     .map((vehicle) => {
       const closestPlatformStop = getClosestPlatformStop(platform, vehicle);
       if (!closestPlatformStop || closestPlatformStop.distanceMeters > FALLBACK_MAX_DISTANCE_METERS) {
@@ -305,148 +306,54 @@ function getStopCardTitle(
   return platform.stop_name;
 }
 
+function isClosestPlatform(
+  stopLat: number,
+  stopLon: number,
+  platform: TransitPlatformGroup,
+  allPlatforms: TransitPlatformGroup[],
+): boolean {
+  if (allPlatforms.length <= 1) {
+    return true;
+  }
+
+  const distToThis = haversineDistanceMeters(stopLat, stopLon, platform.stop_lat, platform.stop_lon);
+
+  for (const other of allPlatforms) {
+    if (other.platform_id === platform.platform_id) {
+      continue;
+    }
+
+    const distToOther = haversineDistanceMeters(stopLat, stopLon, other.stop_lat, other.stop_lon);
+    if (distToOther < distToThis) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function StopDirectionCard({
   platform,
-  stops,
-  vehicles,
+  arrivals,
+  loading,
   routeMap,
-  stopRoutes,
   onToggleFavorite,
   isFavorite,
 }: {
   platform: TransitPlatformGroup;
-  stops: TransitStop[];
-  vehicles: Vehicle[];
+  arrivals: ArrivalSnapshot[];
+  loading: boolean;
   routeMap: Record<string, string>;
-  stopRoutes: Record<string, string[]>;
   onToggleFavorite?: (stop: TransitStop) => void;
   isFavorite?: (stopId: string) => boolean;
 }) {
   const { strings } = useAppPreferences();
-  const [arrivals, setArrivals] = useState<ArrivalSnapshot[]>([]);
-  const [loading, setLoading] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const previousArrivalsRef = useRef<Map<string, ArrivalSnapshot>>(new Map());
-  const stopNameById = useMemo(() => new Map(stops.map((stop) => [stop.stop_id, stop.stop_name])), [stops]);
 
   const routeLabels = useMemo(
     () => Array.from(new Set(platform.routeIds.map((routeId) => routeMap[routeId] || routeId))),
     [platform.routeIds, routeMap],
   );
-
-  useEffect(() => {
-    const controller = new AbortController();
-
-    async function loadArrivals() {
-      const candidateVehicles = vehicles.filter((vehicle) => vehicle.tripId);
-
-      if (candidateVehicles.length === 0) {
-        setArrivals([]);
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
-
-      try {
-        const { data, error } = await supabase
-          .from("stop_times")
-          .select("trip_id, stop_id, stop_sequence, arrival_time, departure_time")
-          .in("trip_id", candidateVehicles.map((vehicle) => vehicle.tripId));
-
-        if (error) {
-          throw error;
-        }
-
-        const tripScheduleMap = buildTripScheduleMap((data ?? []) as ScheduledStopTimeRow[]);
-        const relatedStopMap = new Map(platform.stops.map((candidate) => [candidate.stop_id, candidate]));
-        const targetByTrip = new Map<string, ArrivalCandidate>();
-
-        for (const vehicle of candidateVehicles) {
-          const tripRows = tripScheduleMap.get(vehicle.tripId) ?? [];
-          const firstUpcomingStop = pickBestUpcomingStopMatch(
-            tripRows.filter((row) => relatedStopMap.has(row.stop_id)) as StopTimeMatch[],
-            vehicle,
-            platform.representativeStop,
-            relatedStopMap,
-          );
-          const stopDetails = firstUpcomingStop ? relatedStopMap.get(firstUpcomingStop.stop_id) : null;
-
-          if (!firstUpcomingStop || !stopDetails) {
-            continue;
-          }
-
-          const isTowardStop = bearingTowardStop(
-            vehicle.lat,
-            vehicle.lon,
-            vehicle.bearing,
-            stopDetails.stop_lat,
-            stopDetails.stop_lon,
-          );
-
-          const terminalStopId = getTripTerminalStopId(tripRows);
-          const matchedScheduleRow = tripRows.find((row) => row.stop_id === firstUpcomingStop.stop_id && row.stop_sequence === firstUpcomingStop.stop_sequence);
-
-          targetByTrip.set(vehicle.tripId, {
-            vehicle,
-            stopId: firstUpcomingStop.stop_id,
-            stopLat: stopDetails.stop_lat,
-            stopLon: stopDetails.stop_lon,
-            stopSequence: firstUpcomingStop.stop_sequence,
-            lineNumber: routeMap[vehicle.routeId] || vehicle.vehicleLabel || "?",
-            isExactStop: platform.stops.some((stop) => stop.stop_id === firstUpcomingStop.stop_id),
-            isTowardStop,
-            scheduledTravelSeconds: estimateRemainingTripSeconds(vehicle, tripRows, firstUpcomingStop.stop_sequence),
-            destinationName: terminalStopId ? stopNameById.get(terminalStopId) ?? null : null,
-            scheduledTimeText: getScheduledTimeText(matchedScheduleRow),
-          });
-        }
-
-        const bestCandidates = Array.from(targetByTrip.values())
-          .sort((left, right) => getApproximateEtaSeconds(left, platform.representativeStop) - getApproximateEtaSeconds(right, platform.representativeStop))
-          .slice(0, 3);
-
-        const estimates = await Promise.all(
-          bestCandidates.map(async (candidate) => {
-            const etaSeconds = getApproximateEtaSeconds(candidate, platform.representativeStop);
-            const key = `${candidate.vehicle.tripId}-${candidate.vehicle.vehicleId}`;
-            const previousArrival = previousArrivalsRef.current.get(key);
-
-            return {
-              etaSeconds,
-              lineNumber: candidate.lineNumber,
-              tripId: candidate.vehicle.tripId,
-              vehicleId: candidate.vehicle.vehicleId,
-              stopSequence: candidate.stopSequence,
-              rankingScore: etaSeconds,
-              destinationName: candidate.destinationName,
-              scheduledTimeText: candidate.scheduledTimeText,
-              calculatedAt: Date.now(),
-            } satisfies ArrivalSnapshot;
-          }),
-        );
-
-        const stabilizedEstimates = estimates.map((estimate) => {
-          const key = `${estimate.tripId}-${estimate.vehicleId}`;
-          const previous = previousArrivalsRef.current.get(key);
-          const stabilized = stabilizeArrivalEstimate(estimate, previous);
-          previousArrivalsRef.current.set(key, stabilized);
-          return stabilized;
-        });
-
-        setArrivals(stabilizedEstimates);
-      } catch (error) {
-        console.warn("Stop arrivals load failed", error);
-        setArrivals([]);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadArrivals();
-
-    return () => controller.abort();
-  }, [platform, routeMap, vehicles]);
 
   useEffect(() => {
     if (arrivals.length === 0) {
@@ -524,6 +431,146 @@ function StopDirectionCard({
   );
 }
 
+function computePlatformArrivals(
+  platform: TransitPlatformGroup,
+  allPlatforms: TransitPlatformGroup[],
+  stopGroup: TransitStopGroup,
+  vehicles: Vehicle[],
+  routeMap: Record<string, string>,
+  tripScheduleMap: ReadonlyMap<string, ScheduledStopTimeRow[]>,
+  stopNameById: ReadonlyMap<string, string>,
+  stopPositionById: ReadonlyMap<string, TransitStop>,
+): ArrivalResult[] {
+  const relatedStopMap = new Map(stopGroup.stops.map((candidate) => [candidate.stop_id, candidate]));
+
+  for (const [, rows] of tripScheduleMap) {
+    for (const row of rows) {
+      if (relatedStopMap.has(row.stop_id)) {
+        continue;
+      }
+
+      const fullStop = stopPositionById.get(row.stop_id);
+      if (!fullStop) {
+        continue;
+      }
+
+      const distToGroup = haversineDistanceMeters(
+        fullStop.stop_lat,
+        fullStop.stop_lon,
+        platform.stop_lat,
+        platform.stop_lon,
+      );
+
+      if (distToGroup <= NEARBY_STOP_MATCH_RADIUS_METERS) {
+        relatedStopMap.set(row.stop_id, fullStop);
+      }
+    }
+  }
+
+  const targetByTrip = new Map<string, ArrivalCandidate>();
+
+  for (const vehicle of vehicles) {
+    if (!vehicle.tripId) {
+      continue;
+    }
+
+    const tripRows = tripScheduleMap.get(vehicle.tripId) ?? [];
+
+    const lastSequence = tripRows.length > 0 ? tripRows[tripRows.length - 1].stop_sequence : null;
+    if (lastSequence !== null && vehicle.currentStopSequence >= lastSequence) {
+      continue;
+    }
+
+    const firstUpcomingStop = pickBestUpcomingStopMatch(
+      tripRows.filter((row) => relatedStopMap.has(row.stop_id)) as StopTimeMatch[],
+      vehicle,
+      platform.representativeStop,
+      relatedStopMap,
+    );
+    const stopDetails = firstUpcomingStop ? relatedStopMap.get(firstUpcomingStop.stop_id) : null;
+
+    if (!firstUpcomingStop || !stopDetails) {
+      continue;
+    }
+
+    if (!isClosestPlatform(stopDetails.stop_lat, stopDetails.stop_lon, platform, allPlatforms)) {
+      continue;
+    }
+
+    const isTowardStop = bearingTowardStop(
+      vehicle.lat,
+      vehicle.lon,
+      vehicle.bearing,
+      stopDetails.stop_lat,
+      stopDetails.stop_lon,
+    );
+
+    const terminalStopId = getTripTerminalStopId(tripRows);
+    const matchedScheduleRow = tripRows.find((row) => row.stop_id === firstUpcomingStop.stop_id && row.stop_sequence === firstUpcomingStop.stop_sequence);
+
+    const effectiveStopSequence = inferEffectiveStopSequence(
+      vehicle.lat,
+      vehicle.lon,
+      vehicle.currentStopSequence,
+      firstUpcomingStop.stop_sequence,
+      tripRows,
+      stopPositionById,
+    );
+    const effectiveVehicle = effectiveStopSequence !== vehicle.currentStopSequence
+      ? { ...vehicle, currentStopSequence: effectiveStopSequence, currentStatus: "IN_TRANSIT_TO" as const }
+      : vehicle;
+
+    const candidate: ArrivalCandidate = {
+      vehicle,
+      stopId: firstUpcomingStop.stop_id,
+      stopLat: stopDetails.stop_lat,
+      stopLon: stopDetails.stop_lon,
+      stopSequence: firstUpcomingStop.stop_sequence,
+      effectiveStopSequence,
+      lineNumber: routeMap[vehicle.routeId] || vehicle.vehicleLabel || "?",
+      isExactStop: platform.stops.some((stop) => stop.stop_id === firstUpcomingStop.stop_id),
+      isTowardStop,
+      scheduledTravelSeconds: estimateRemainingTripSeconds(effectiveVehicle, tripRows, firstUpcomingStop.stop_sequence),
+      destinationName: terminalStopId ? stopNameById.get(terminalStopId) ?? null : null,
+      scheduledTimeText: getScheduledTimeText(matchedScheduleRow),
+    };
+
+    targetByTrip.set(vehicle.tripId, candidate);
+  }
+
+  const candidateVehicles = vehicles.filter((v) => v.tripId);
+  const bestCandidates = Array.from(targetByTrip.values())
+    .sort((left, right) => getApproximateEtaSeconds(left, platform.representativeStop) - getApproximateEtaSeconds(right, platform.representativeStop))
+    .slice(0, 3);
+
+  const estimates: ArrivalResult[] = bestCandidates.map((candidate) => {
+    const etaSeconds = getApproximateEtaSeconds(candidate, platform.representativeStop);
+    return {
+      etaSeconds,
+      lineNumber: candidate.lineNumber,
+      tripId: candidate.vehicle.tripId,
+      vehicleId: candidate.vehicle.vehicleId,
+      stopSequence: candidate.stopSequence,
+      rankingScore: etaSeconds,
+      destinationName: candidate.destinationName,
+      scheduledTimeText: candidate.scheduledTimeText,
+    };
+  });
+
+  const coveredTripIds = new Set(estimates.map((e) => e.tripId));
+  const uncoveredVehicles = candidateVehicles.filter((v) => !coveredTripIds.has(v.tripId));
+
+  if (uncoveredVehicles.length > 0 && estimates.length < 3) {
+    const fallback = buildFallbackArrivalEstimate(platform, uncoveredVehicles, routeMap, tripScheduleMap, stopNameById);
+    if (fallback && !coveredTripIds.has(fallback.tripId)) {
+      estimates.push(fallback);
+    }
+  }
+
+  estimates.sort((left, right) => left.etaSeconds - right.etaSeconds);
+  return estimates.slice(0, 3);
+}
+
 export default function StopPopup({
   stopGroup,
   stops,
@@ -535,7 +582,90 @@ export default function StopPopup({
   isFavorite,
 }: StopPopupProps) {
   const { strings } = useAppPreferences();
-  const platformGroups = useMemo(() => buildPlatformGroups(stopGroup, stopRoutes), [stopGroup, stopRoutes]);
+  const [loading, setLoading] = useState(false);
+  const [arrivalsByPlatform, setArrivalsByPlatform] = useState<Map<string, ArrivalSnapshot[]>>(new Map());
+  const previousArrivalsRef = useRef<Map<string, ArrivalSnapshot>>(new Map());
+
+  const platformGroups = useMemo(() => {
+    const allPlatforms = buildPlatformGroups(stopGroup, stopRoutes);
+    const withRoutes = allPlatforms.filter((platform) => platform.routeIds.length > 0);
+    return withRoutes.length > 0 ? withRoutes : allPlatforms;
+  }, [stopGroup, stopRoutes]);
+
+  const stopNameById = useMemo(() => new Map(stops.map((stop) => [stop.stop_id, stop.stop_name])), [stops]);
+  const stopPositionById = useMemo(() => new Map(stops.map((stop) => [stop.stop_id, stop])), [stops]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadArrivals() {
+      const candidateVehicles = vehicles.filter((vehicle) => vehicle.tripId);
+
+      if (candidateVehicles.length === 0) {
+        setArrivalsByPlatform(new Map());
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+
+      try {
+        const { data: stData, error } = await fetchStopTimesMulti(
+          candidateVehicles.map((vehicle) => vehicle.tripId)
+        );
+        const data = stData?.data ?? null;
+
+        if (error) {
+          throw error;
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        const tripScheduleMap = buildTripScheduleMap((data ?? []) as ScheduledStopTimeRow[]);
+        const nextMap = new Map<string, ArrivalSnapshot[]>();
+
+        for (const platform of platformGroups) {
+          const rawEstimates = computePlatformArrivals(
+            platform,
+            platformGroups,
+            stopGroup,
+            vehicles,
+            routeMap,
+            tripScheduleMap,
+            stopNameById,
+            stopPositionById,
+          );
+
+          const stabilized = rawEstimates.map((estimate) => {
+            const key = `${estimate.tripId}-${estimate.vehicleId}`;
+            const previous = previousArrivalsRef.current.get(key);
+            const snapshot = stabilizeArrivalEstimate(estimate, previous);
+            previousArrivalsRef.current.set(key, snapshot);
+            return snapshot;
+          });
+
+          nextMap.set(platform.platform_id, stabilized);
+        }
+
+        setArrivalsByPlatform(nextMap);
+      } catch (error) {
+        console.warn("Stop arrivals load failed", error);
+        setArrivalsByPlatform(new Map());
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadArrivals();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [platformGroups, stopGroup, routeMap, vehicles, stops]);
 
   return (
     <div>
@@ -545,10 +675,9 @@ export default function StopPopup({
           <StopDirectionCard
             key={platform.platform_id}
             platform={platform}
-            stops={stops}
-            vehicles={vehicles}
+            arrivals={arrivalsByPlatform.get(platform.platform_id) ?? []}
+            loading={loading}
             routeMap={routeMap}
-            stopRoutes={stopRoutes}
             onToggleFavorite={onToggleFavorite}
             isFavorite={isFavorite}
           />

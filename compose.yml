@@ -2,9 +2,15 @@ services:
   ul-online:
     build:
       context: .
-      args:
-        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
-        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY}
     ports:
       - "8080:8080"
+    environment:
+      - TRAFIKLAB_GTFS_RT_KEY=${TRAFIKLAB_GTFS_RT_KEY}
+      - TRAFIKLAB_GTFS_REGIONAL_STATIC_KEY=${TRAFIKLAB_GTFS_REGIONAL_STATIC_KEY}
+      - TRAFIKVERKET_OPEN_DATA_API_KEY=${TRAFIKVERKET_OPEN_DATA_API_KEY}
+    volumes:
+      - gtfs-data:/app/data
     restart: unless-stopped
+
+volumes:
+  gtfs-data:

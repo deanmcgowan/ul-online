@@ -1,5 +1,7 @@
 node_modules
 dist
+dist-server
+data
 .git
 .vscode
 .DS_Store
@@ -9,3 +11,5 @@ npm-debug.log*
 coverage
 playwright-report
 test-results
+bun.lockb
+supabase

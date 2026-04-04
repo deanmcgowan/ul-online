@@ -1,8 +1,8 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { Loader2, MapPin } from "lucide-react";
 import type { Vehicle, TransitStop } from "@/components/BusMap";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
-import { supabase } from "@/integrations/supabase/client";
+import { fetchStopTimes } from "@/lib/api";
 
 interface BusPopupProps {
   vehicle: Vehicle & { lineNumber: string };
@@ -13,11 +13,24 @@ interface BusPopupProps {
   routeMap: Record<string, string>;
 }
 
+interface StopTimeRow {
+  stop_id: string;
+  stop_sequence: number;
+  arrival_time: string;
+  departure_time: string;
+}
+
 interface NextStopEntry {
+  stopId: string;
   stopName: string;
+  stopLat: number;
+  stopLon: number;
   scheduledTime: string | null;
   isTerminal: boolean;
 }
+
+const MAX_UPCOMING_STOPS = 5;
+const CLOSEST_STOP_RADIUS_METERS = 2000;
 
 function haversineDistance(
   lat1: number,
@@ -41,6 +54,13 @@ function formatDuration(minutes: number): string {
   return `${Math.round(minutes)} min`;
 }
 
+/** Parse "HH:MM:SS" (may exceed 24h) into seconds-since-midnight */
+function gtfsTimeToSeconds(value: string): number {
+  const parts = value.split(":").map(Number);
+  if (parts.length !== 3) return -1;
+  return parts[0] * 3600 + parts[1] * 60 + parts[2];
+}
+
 function formatGtfsTime(value: string | null): string | null {
   if (!value) return null;
   const parts = value.split(":").map(Number);
@@ -58,9 +78,11 @@ const BusPopup = ({
   routeMap,
 }: BusPopupProps) => {
   const { strings } = useAppPreferences();
-  const [nextStops, setNextStops] = useState<NextStopEntry[]>([]);
+  // Full schedule for the trip — fetched once per tripId
+  const [schedule, setSchedule] = useState<StopTimeRow[]>([]);
   const [loadingStops, setLoadingStops] = useState(false);
-  const stopNameById = useMemo(() => new Map(stops.map((s) => [s.stop_id, s.stop_name])), [stops]);
+  const fetchedTripRef = useRef<string>("");
+  const stopById = useMemo(() => new Map(stops.map((s) => [s.stop_id, s])), [stops]);
 
   const distToVehicle = userLocation
     ? haversineDistance(userLocation[1], userLocation[0], vehicle.lat, vehicle.lon)
@@ -69,47 +91,89 @@ const BusPopup = ({
   const walkTimeMin = distToVehicle !== null ? distToVehicle / (walkSpeed / 3.6) / 60 : null;
   const runTimeMin = distToVehicle !== null ? distToVehicle / (runSpeed / 3.6) / 60 : null;
 
-  const destination = nextStops.length > 0
-    ? nextStops[nextStops.length - 1]?.stopName ?? null
-    : null;
-
+  // Fetch full schedule ONCE per tripId
   useEffect(() => {
-    if (!vehicle.tripId) {
-      setNextStops([]);
-      return;
-    }
+    if (!vehicle.tripId || vehicle.tripId === fetchedTripRef.current) return;
+    fetchedTripRef.current = vehicle.tripId;
 
     let cancelled = false;
     setLoadingStops(true);
 
-    supabase
-      .from("stop_times")
-      .select("stop_id, stop_sequence, arrival_time, departure_time")
-      .eq("trip_id", vehicle.tripId)
-      .gte("stop_sequence", vehicle.currentStopSequence)
-      .order("stop_sequence", { ascending: true })
-      .limit(20)
+    fetchStopTimes(vehicle.tripId)
       .then(({ data, error }) => {
-        if (cancelled || error || !data) {
-          setLoadingStops(false);
-          return;
-        }
-
-        const upcoming = data
-          .filter((row) => row.stop_sequence >= vehicle.currentStopSequence)
-          .slice(0, 6)
-          .map((row, _index, allRows) => ({
-            stopName: stopNameById.get(row.stop_id) ?? row.stop_id,
-            scheduledTime: formatGtfsTime(row.arrival_time ?? row.departure_time),
-            isTerminal: row.stop_sequence === allRows[allRows.length - 1]?.stop_sequence,
-          }));
-
-        setNextStops(upcoming);
+        if (cancelled) return;
+        setSchedule(!error && data?.data ? data.data : []);
         setLoadingStops(false);
       });
 
     return () => { cancelled = true; };
-  }, [vehicle.tripId, vehicle.currentStopSequence, stopNameById]);
+  }, [vehicle.tripId]);
+
+  // Derive upcoming stops from cached schedule + current vehicle position.
+  // Re-computes whenever the bus moves, without querying the DB.
+  const nextStops = useMemo((): NextStopEntry[] => {
+    if (schedule.length === 0) return [];
+
+    // Use GPS proximity to find the nearest stop on the route
+    let nearestIdx = 0;
+    let nearestDist = Infinity;
+    if (vehicle.lat && vehicle.lon) {
+      for (let i = 0; i < schedule.length; i++) {
+        const stop = stopById.get(schedule[i].stop_id);
+        if (!stop) continue;
+        const d = haversineDistance(vehicle.lat, vehicle.lon, stop.stop_lat, stop.stop_lon);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearestIdx = i;
+        }
+      }
+    }
+
+    // If bus is within 200m of the nearest stop it's at or just past it;
+    // otherwise it's heading toward it.
+    let nextIdx = nearestIdx;
+    if (nearestDist < 200 && nearestIdx < schedule.length - 1) {
+      nextIdx++;
+    }
+
+    // If we're past all stops, show the last few
+    if (nextIdx >= schedule.length) {
+      nextIdx = Math.max(0, schedule.length - MAX_UPCOMING_STOPS);
+    }
+
+    const lastSeq = schedule[schedule.length - 1]?.stop_sequence;
+    return schedule.slice(nextIdx, nextIdx + MAX_UPCOMING_STOPS).map((row) => {
+      const stop = stopById.get(row.stop_id);
+      return {
+        stopId: row.stop_id,
+        stopName: stop?.stop_name ?? row.stop_id,
+        stopLat: stop?.stop_lat ?? 0,
+        stopLon: stop?.stop_lon ?? 0,
+        scheduledTime: formatGtfsTime(row.arrival_time ?? row.departure_time),
+        isTerminal: row.stop_sequence === lastSeq,
+      };
+    });
+  }, [schedule, vehicle.lat, vehicle.lon, stopById]);
+
+  const destination = nextStops.length > 0
+    ? nextStops[nextStops.length - 1]?.stopName ?? null
+    : null;
+
+  // Find the stop closest to user among upcoming stops
+  const closestStopId = useMemo(() => {
+    if (!userLocation || nextStops.length === 0) return null;
+    let bestId: string | null = null;
+    let bestDist = CLOSEST_STOP_RADIUS_METERS;
+    for (const s of nextStops) {
+      if (!s.stopLat || !s.stopLon) continue;
+      const d = haversineDistance(userLocation[1], userLocation[0], s.stopLat, s.stopLon);
+      if (d < bestDist) {
+        bestDist = d;
+        bestId = s.stopId;
+      }
+    }
+    return bestId;
+  }, [userLocation, nextStops]);
 
   return (
     <div>
@@ -140,15 +204,28 @@ const BusPopup = ({
         <div className="mt-2 pt-2 border-t">
           <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-1">{strings.nextStops}</p>
           <div className="space-y-0.5">
-            {nextStops.map((stop, index) => (
-              <div key={index} className="flex items-center gap-1.5 text-xs">
-                <MapPin className={`h-3 w-3 shrink-0 ${stop.isTerminal ? "text-primary" : "text-muted-foreground"}`} />
-                <span className={`flex-1 truncate ${stop.isTerminal ? "font-semibold" : ""}`}>{stop.stopName}</span>
-                {stop.scheduledTime ? (
-                  <span className="text-muted-foreground shrink-0">{stop.scheduledTime}</span>
-                ) : null}
-              </div>
-            ))}
+            {nextStops.map((stop, index) => {
+              const isClosest = stop.stopId === closestStopId;
+              const iconColor = stop.isTerminal
+                  ? "text-primary"
+                  : isClosest
+                    ? "text-green-600"
+                    : "text-muted-foreground";
+              const nameClass = stop.isTerminal ? "font-semibold" : "";
+              return (
+                <div key={index} className="flex items-center gap-1.5 text-xs">
+                  {isClosest ? (
+                    <MapPin className="h-3 w-3 shrink-0 text-green-600" />
+                  ) : (
+                    <MapPin className={`h-3 w-3 shrink-0 ${iconColor}`} />
+                  )}
+                  <span className={`flex-1 truncate ${nameClass}`}>{stop.stopName}</span>
+                  {stop.scheduledTime ? (
+                    <span className="text-muted-foreground shrink-0">{stop.scheduledTime}</span>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         </div>
       ) : null}

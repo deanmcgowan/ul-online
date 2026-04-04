@@ -131,16 +131,9 @@ interface BusMapProps {
   onMapReady?: (map: Map) => void;
   isFavorite?: (stopId: string) => boolean;
   onToggleFavorite?: (stop: TransitStop) => void;
-  showSkolskjuts?: boolean;
   stopVisibilityZoom?: number;
   stopRoutes?: Record<string, string[]>;
   highlightedStop?: TransitStop | null;
-}
-
-/** Check if a stop name indicates skolskjuts */
-function isSkolskjuts(name: string): boolean {
-  const lower = name.toLowerCase();
-  return /(skolskjuts|skolhållplats|skolhallplats|skolhpl|skolan|skola|\bskol\b)/.test(lower);
 }
 
 const BusMap = ({
@@ -157,7 +150,6 @@ const BusMap = ({
   onMapReady,
   isFavorite,
   onToggleFavorite,
-  showSkolskjuts = false,
   stopVisibilityZoom = 14,
   stopRoutes = {},
   highlightedStop = null,
@@ -192,9 +184,8 @@ const BusMap = ({
 
   // Memoize filtered + deduplicated stops
   const processedStopGroups = useMemo(() => {
-    const filtered = showSkolskjuts ? stops : stops.filter((s) => !isSkolskjuts(s.stop_name));
-    return buildStopGroups(filtered, stopRoutes);
-  }, [stops, stopRoutes, showSkolskjuts]);
+    return buildStopGroups(stops, stopRoutes);
+  }, [stops, stopRoutes]);
 
   const visibleStopGroups = useMemo(() => {
     const map = mapRef.current;
@@ -321,7 +312,6 @@ const BusMap = ({
       element: popupEl,
       positioning: "bottom-center",
       offset: [0, -15],
-      autoPan: { animation: { duration: 250 } },
     });
     overlayRef.current = overlay;
 
@@ -367,8 +357,27 @@ const BusMap = ({
             if (vf.get("featureType") === "vehicle") {
               const props = vf.getProperties();
               delete props.geometry;
+              const busCoord = fromLonLat([props.lon, props.lat]);
               setPopup({ type: "bus", data: props });
-              overlay.setPosition(e.coordinate);
+              overlay.setPosition(busCoord);
+              // Center the bus in the lower third of the map so the popup
+              // (which extends upward) has room above.
+              const mapSize = map.getSize();
+              if (mapSize) {
+                const targetPixel = [mapSize[0] / 2, mapSize[1] * 0.65];
+                const busPixel = map.getPixelFromCoordinate(busCoord);
+                if (busPixel) {
+                  const currentCenter = map.getView().getCenter()!;
+                  const centerPixel = map.getPixelFromCoordinate(currentCenter)!;
+                  const newCenter = map.getCoordinateFromPixel([
+                    centerPixel[0] + (busPixel[0] - targetPixel[0]),
+                    centerPixel[1] + (busPixel[1] - targetPixel[1]),
+                  ]);
+                  if (newCenter) {
+                    map.getView().animate({ center: newCenter, duration: 400 });
+                  }
+                }
+              }
               onBusClick(props as any);
               handled = true;
             }
@@ -388,6 +397,41 @@ const BusMap = ({
             }
 
             if (clusteredFeatures.length > 1) {
+              // Check if all features are co-located (identical coordinates, can't be split)
+              const coords = clusteredFeatures.map((f) => (f.getGeometry() as Point).getCoordinates());
+              const allColocated = coords.every(
+                (c) => Math.abs(c[0] - coords[0][0]) < 1 && Math.abs(c[1] - coords[0][1]) < 1
+              );
+
+              if (allColocated) {
+                // Merge co-located stop groups into one combined group
+                const allStops: TransitStop[] = [];
+                const allRouteIds = new Set<string>();
+                let groupName = "";
+                for (const f of clusteredFeatures) {
+                  const sg = f.get("stopGroup") as TransitStopGroup | undefined;
+                  if (sg) {
+                    if (!groupName) groupName = sg.stop_name;
+                    allStops.push(...sg.stops);
+                    sg.routeIds.forEach((r) => allRouteIds.add(r));
+                  }
+                }
+                if (allStops.length > 0) {
+                  const merged: TransitStopGroup = {
+                    group_id: allStops.map((s) => s.stop_id).join("|"),
+                    stop_name: groupName,
+                    stop_lat: allStops[0].stop_lat,
+                    stop_lon: allStops[0].stop_lon,
+                    stops: allStops,
+                    routeIds: Array.from(allRouteIds).sort(),
+                  };
+                  setPopup({ type: "stop", data: merged });
+                  overlay.setPosition(e.coordinate);
+                  handled = true;
+                  return;
+                }
+              }
+
               const targetZoom = getClusterSplitZoom(clusteredFeatures, map.getView());
 
               if (targetZoom !== null) {
@@ -631,6 +675,145 @@ const BusMap = ({
     });
   }, [highlightedStop, processedStopGroups]);
 
+  // Derive the live vehicle from the vehicles array when a bus popup is open.
+  // popup.data stores the initial click data (with lineNumber); liveVehicle
+  // always reflects the latest position without triggering popup state changes.
+  const liveVehicle = useMemo(() => {
+    if (!popup || popup.type !== "bus") return null;
+    const orig = popup.data as Vehicle & { lineNumber: string };
+    const updated = vehicles.find((veh) => veh.id === orig.id);
+    if (!updated) return orig;
+    return { ...updated, lineNumber: orig.lineNumber };
+  }, [popup, vehicles]);
+
+  // Track the live bus position: move overlay + shift map so popup stays stable.
+  // Uses a ref to compare previous position, avoiding state updates entirely.
+  const prevBusPosRef = useRef<{ lat: number; lon: number } | null>(null);
+  useEffect(() => {
+    if (!liveVehicle || !mapRef.current || !overlayRef.current) {
+      prevBusPosRef.current = null;
+      return;
+    }
+
+    const map = mapRef.current;
+    const overlay = overlayRef.current;
+    const newCoord = fromLonLat([liveVehicle.lon, liveVehicle.lat]);
+    const prev = prevBusPosRef.current;
+
+    if (prev && (prev.lat !== liveVehicle.lat || prev.lon !== liveVehicle.lon)) {
+      const oldCoord = fromLonLat([prev.lon, prev.lat]);
+      const oldPx = map.getPixelFromCoordinate(oldCoord);
+      const newPx = map.getPixelFromCoordinate(newCoord);
+      if (oldPx && newPx) {
+        const dx = newPx[0] - oldPx[0];
+        const dy = newPx[1] - oldPx[1];
+        if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+          const centerPx = map.getPixelFromCoordinate(map.getView().getCenter()!);
+          if (centerPx) {
+            const newCenter = map.getCoordinateFromPixel([centerPx[0] + dx, centerPx[1] + dy]);
+            if (newCenter) map.getView().setCenter(newCenter);
+          }
+        }
+      }
+    }
+
+    overlay.setPosition(newCoord);
+    prevBusPosRef.current = { lat: liveVehicle.lat, lon: liveVehicle.lon };
+  }, [liveVehicle?.lat, liveVehicle?.lon]);
+
+  // After a popup opens, pan the map so the full popup is visible.
+  // Uses ResizeObserver to re-pan when the popup grows (e.g. async data loads).
+  // Depends on a stable key so it only runs when a NEW popup opens, not on
+  // every liveVehicle position update.
+  const popupKey = popup
+    ? `${popup.type}-${popup.type === "bus" ? (popup.data as Vehicle).id : "stop"}`
+    : null;
+  useEffect(() => {
+    if (!popup || !mapRef.current || !overlayRef.current) return;
+
+    const map = mapRef.current;
+    const overlay = overlayRef.current;
+    const isBus = popup.type === "bus";
+
+    function panToFitPopup() {
+      const el = overlay.getElement();
+      const anchorPos = overlay.getPosition();
+      if (!el || !anchorPos) return;
+
+      // Measure the actual content child, not the portal container
+      const content = el.firstElementChild as HTMLElement | null;
+      if (!content) return;
+
+      const mapSize = map.getSize();
+      if (!mapSize) return;
+
+      const [mapW, mapH] = mapSize;
+
+      const contentRect = content.getBoundingClientRect();
+      const mapRect = map.getTargetElement()!.getBoundingClientRect();
+
+      // Convert popup's viewport-relative rect to map-relative pixels
+      const popupTop = contentRect.top - mapRect.top;
+      const popupLeft = contentRect.left - mapRect.left;
+      const popupRight = contentRect.right - mapRect.left;
+      const popupBottom = contentRect.bottom - mapRect.top;
+
+      const margin = 12;
+      let dx = 0;
+      let dy = 0;
+
+      if (popupTop - margin < 0) dy = popupTop - margin;
+      if (popupBottom + margin > mapH) dy = popupBottom + margin - mapH;
+      if (popupLeft - margin < 0) dx = popupLeft - margin;
+      if (popupRight + margin > mapW) dx = popupRight + margin - mapW;
+
+      if (dx !== 0 || dy !== 0) {
+        const currentCenter = map.getView().getCenter();
+        if (!currentCenter) return;
+        const currentPixel = map.getPixelFromCoordinate(currentCenter);
+        if (!currentPixel) return;
+        const newCenter = map.getCoordinateFromPixel([
+          currentPixel[0] + dx,
+          currentPixel[1] + dy,
+        ]);
+        if (newCenter) {
+          // For bus popups use instant correction to avoid fighting the centering animation
+          if (isBus) {
+            map.getView().setCenter(newCenter);
+          } else {
+            map.getView().animate({ center: newCenter, duration: 250 });
+          }
+        }
+      }
+    }
+
+    // Observe the portal container's subtree for size changes
+    const el = overlay.getElement();
+    if (!el) return;
+
+    const observer = new ResizeObserver(() => panToFitPopup());
+    // Observe the content child once it appears
+    const content = el.firstElementChild as HTMLElement | null;
+    if (content) {
+      observer.observe(content);
+    }
+    // Also observe container in case child mounts later
+    observer.observe(el);
+
+    // For bus popups, delay initial pan to let centering animation finish
+    const delay = isBus ? 450 : 0;
+    let frameId: number | undefined;
+    const timerId = window.setTimeout(() => {
+      frameId = requestAnimationFrame(() => panToFitPopup());
+    }, delay);
+
+    return () => {
+      window.clearTimeout(timerId);
+      if (frameId !== undefined) cancelAnimationFrame(frameId);
+      observer.disconnect();
+    };
+  }, [popupKey]);
+
   const popupContent = popup ? (
     <div className="bg-background rounded-lg shadow-lg border p-3 min-w-[200px] max-w-[280px] relative">
       {popup.type === "stop" ? (
@@ -648,10 +831,10 @@ const BusMap = ({
             overlayRef.current?.setPosition(undefined);
           }}
         />
-      ) : (
+      ) : liveVehicle ? (
         <Suspense fallback={<div className="text-xs text-muted-foreground">{strings.loadingBusDetails}</div>}>
           <BusPopup
-            vehicle={popup.data as Vehicle & { lineNumber: string }}
+            vehicle={liveVehicle}
             userLocation={userLocation}
             walkSpeed={walkSpeed}
             runSpeed={runSpeed}
@@ -659,7 +842,7 @@ const BusMap = ({
             routeMap={routeMap}
           />
         </Suspense>
-      )}
+      ) : null}
       <button
         className="absolute top-1 right-2 text-muted-foreground hover:text-foreground text-lg leading-none"
         onClick={() => {

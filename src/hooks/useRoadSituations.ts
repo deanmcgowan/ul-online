@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { fetchSituations as fetchSituationsApi } from "@/lib/api";
 
 const ROAD_SITUATION_REFRESH_MS = 120000;
 
@@ -46,9 +46,7 @@ export function useRoadSituations(query: RoadSituationQuery | null, enabled: boo
       setLoading(true);
 
       try {
-        const { data, error } = await supabase.functions.invoke("trafikverket-situations", {
-          body: query,
-        });
+        const { data, error } = await fetchSituationsApi(query);
 
         if (error) {
           throw error;

@@ -91,6 +91,29 @@ describe("buildStopGroups", () => {
     expect(platforms).toHaveLength(3);
   });
 
+  it("groups single-word stop names that are nearby and identical", () => {
+    const northbound = createStop({ stop_id: "asby-n", stop_name: "Asby", stop_lat: 59.9, stop_lon: 17.7 });
+    const southbound = createStop({ stop_id: "asby-s", stop_name: "Asby", stop_lat: 59.9003, stop_lon: 17.70005 });
+    const unrelated = createStop({ stop_id: "other", stop_name: "Björklinge", stop_lat: 59.905, stop_lon: 17.71 });
+
+    const groups = buildStopGroups([northbound, southbound, unrelated]);
+
+    expect(groups).toHaveLength(2);
+    const asbyGroup = groups.find((g) => g.stop_name === "Asby");
+    expect(asbyGroup?.stops).toHaveLength(2);
+  });
+
+  it("groups a short name with a longer variant sharing the same base token", () => {
+    const a = createStop({ stop_id: "sk-1", stop_name: "Skommarbo", stop_lat: 59.9, stop_lon: 17.7 });
+    const b = createStop({ stop_id: "sk-2", stop_name: "Skommarbo station", stop_lat: 59.9002, stop_lon: 17.7001 });
+    const c = createStop({ stop_id: "sk-3", stop_name: "Skommarbo", stop_lat: 59.9001, stop_lon: 17.70005 });
+
+    const groups = buildStopGroups([a, b, c]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].stops).toHaveLength(3);
+  });
+
   it("merges exact duplicate stop_ids and base-id matches (north/south variants)", () => {
     const visualGroup = buildStopGroups([
       createStop({ stop_id: "stora-vallskog-n", stop_name: "Stora Vallskog", stop_lat: 59.9, stop_lon: 17.7 }),

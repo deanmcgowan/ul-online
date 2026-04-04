@@ -1,0 +1,60 @@
+steps:
+  # ── Build & push container ──────────────────────────────────
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest"
+      - "."
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "--all-tags"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}"
+
+  # ── Deploy to Cloud Run ─────────────────────────────────────
+  - name: "gcr.io/cloud-builders/gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "${_SERVICE}-${_ENV}"
+      - "--image"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}"
+      - "--region"
+      - "${_REGION}"
+      - "--platform"
+      - "managed"
+      - "--allow-unauthenticated"
+      - "--port"
+      - "8080"
+      - "--memory"
+      - "512Mi"
+      - "--cpu"
+      - "1"
+      - "--min-instances"
+      - "${_MIN_INSTANCES}"
+      - "--max-instances"
+      - "${_MAX_INSTANCES}"
+      - "--set-secrets"
+      - "TRAFIKLAB_GTFS_RT_KEY=TRAFIKLAB_GTFS_RT_KEY:latest,TRAFIKLAB_GTFS_REGIONAL_STATIC_KEY=TRAFIKLAB_GTFS_REGIONAL_STATIC_KEY:latest,TRAFIKVERKET_OPEN_DATA_API_KEY=TRAFIKVERKET_OPEN_DATA_API_KEY:latest"
+      - "--execution-environment"
+      - "gen2"
+      - "--set-env-vars"
+      - "NODE_ENV=production,DB_PATH=/app/data/gtfs.db"
+
+substitutions:
+  _REGION: europe-north1
+  _REPO: ul-online
+  _SERVICE: ul-online
+  _ENV: stage
+  _MIN_INSTANCES: "0"
+  _MAX_INSTANCES: "2"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}"

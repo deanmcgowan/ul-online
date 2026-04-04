@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { fetchStopTimesMulti } from "@/lib/api";
 import type { TransitStop, Vehicle } from "@/components/BusMap";
 import { bearingTowardStop } from "@/lib/busIcon";
 import type { RoadSituation } from "@/hooks/useRoadSituations";
@@ -372,11 +372,10 @@ export function useCommutePlans({
         };
       }
 
-      const { data, error } = await supabase
-        .from("stop_times")
-        .select("trip_id, stop_id, stop_sequence, arrival_time, departure_time")
-        .in("trip_id", [...new Set(candidateVehicles.map((vehicle) => vehicle.tripId))])
-;
+      const { data: stData, error } = await fetchStopTimesMulti(
+        [...new Set(candidateVehicles.map((vehicle) => vehicle.tripId))]
+      );
+      const data = stData?.data ?? null;
 
       if (error) {
         throw error;

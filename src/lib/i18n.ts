@@ -24,7 +24,6 @@ export interface AppStrings {
   maxWalkDistance: string;
   maxWalkDistanceHint: string;
   runSpeed: string;
-  showSkolskjuts: string;
   highAccuracyLocation: string;
   highAccuracyHint: string;
   stopVisibilityZoom: string;
@@ -158,7 +157,6 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     maxWalkDistance: "Maximum walk to a stop",
     maxWalkDistanceHint: "The planner only considers stops within this distance from your saved places.",
     runSpeed: "Running speed",
-    showSkolskjuts: "Show school transport stops",
     highAccuracyLocation: "High accuracy location",
     highAccuracyHint: "Uses more battery. Live tracking and GPS now pause completely when the app is hidden or inactive.",
     stopVisibilityZoom: "Show stop markers from zoom level",
@@ -290,7 +288,6 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     maxWalkDistance: "Max gångavstånd till hållplats",
     maxWalkDistanceHint: "Planeraren tar bara med hållplatser inom det här avståndet från dina sparade platser.",
     runSpeed: "Löphastighet",
-    showSkolskjuts: "Visa skolskjutshållplatser",
     highAccuracyLocation: "Hög platsnoggrannhet",
     highAccuracyHint: "Använder mer batteri. Liveuppdatering och GPS pausas nu helt när appen är dold eller inaktiv.",
     stopVisibilityZoom: "Visa hållplatsmarkörer från zoomnivå",

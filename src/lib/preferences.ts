@@ -5,7 +5,6 @@ export interface AppPreferences {
   runSpeed: number;
   bufferMinutes: number;
   maxWalkDistanceMeters: number;
-  showSkolskjuts: boolean;
   highAccuracyLocation: boolean;
   stopVisibilityZoom: number;
   language: LanguagePreference;
@@ -16,7 +15,6 @@ export const PREFERENCE_STORAGE_KEYS = [
   "runSpeed",
   "bufferMinutes",
   "maxWalkDistanceMeters",
-  "showSkolskjuts",
   "highAccuracyLocation",
   "stopVisibilityZoom",
   "language",
@@ -27,7 +25,6 @@ export const DEFAULT_PREFERENCES: AppPreferences = {
   runSpeed: 9,
   bufferMinutes: 5,
   maxWalkDistanceMeters: 1000,
-  showSkolskjuts: false,
   highAccuracyLocation: false,
   stopVisibilityZoom: 14,
   language: "system",
@@ -52,7 +49,6 @@ export function loadPreferences(): AppPreferences {
     runSpeed: readNumber(localStorage.getItem("runSpeed"), DEFAULT_PREFERENCES.runSpeed),
     bufferMinutes: readNumber(localStorage.getItem("bufferMinutes"), DEFAULT_PREFERENCES.bufferMinutes),
     maxWalkDistanceMeters: readNumber(localStorage.getItem("maxWalkDistanceMeters"), DEFAULT_PREFERENCES.maxWalkDistanceMeters),
-    showSkolskjuts: localStorage.getItem("showSkolskjuts") === "true",
     highAccuracyLocation: localStorage.getItem("highAccuracyLocation") === "true",
     stopVisibilityZoom: readNumber(localStorage.getItem("stopVisibilityZoom"), DEFAULT_PREFERENCES.stopVisibilityZoom),
     language: readLanguagePreference(localStorage.getItem("language")),
@@ -64,7 +60,6 @@ export function savePreferences(preferences: AppPreferences): void {
   localStorage.setItem("runSpeed", preferences.runSpeed.toString());
   localStorage.setItem("bufferMinutes", preferences.bufferMinutes.toString());
   localStorage.setItem("maxWalkDistanceMeters", preferences.maxWalkDistanceMeters.toString());
-  localStorage.setItem("showSkolskjuts", preferences.showSkolskjuts.toString());
   localStorage.setItem("highAccuracyLocation", preferences.highAccuracyLocation.toString());
   localStorage.setItem("stopVisibilityZoom", preferences.stopVisibilityZoom.toString());
   localStorage.setItem("language", preferences.language);

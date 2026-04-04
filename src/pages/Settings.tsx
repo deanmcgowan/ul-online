@@ -189,19 +189,6 @@ const Settings = () => {
 
                 <div className="flex items-start justify-between gap-4 rounded-xl border bg-muted/30 p-4">
                   <div>
-                    <label htmlFor="skolskjuts" className="text-sm font-medium cursor-pointer">
-                      {strings.showSkolskjuts}
-                    </label>
-                  </div>
-                  <Switch
-                    id="skolskjuts"
-                    checked={draft.showSkolskjuts}
-                    onCheckedChange={(checked) => updateDraft("showSkolskjuts", checked)}
-                  />
-                </div>
-
-                <div className="flex items-start justify-between gap-4 rounded-xl border bg-muted/30 p-4">
-                  <div>
                     <label htmlFor="high-accuracy-location" className="text-sm font-medium cursor-pointer">
                       {strings.highAccuracyLocation}
                     </label>

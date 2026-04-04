@@ -1,4 +1,5 @@
 import type { Vehicle } from "@/components/BusMap";
+import { haversineDistanceMeters } from "@/lib/transitMatching";
 
 export interface ScheduledStopTimeRow {
   trip_id: string;
@@ -88,4 +89,35 @@ export function estimateRemainingTripSeconds(
 
 export function getTripTerminalStopId(tripRows: ScheduledStopTimeRow[]): string | null {
   return tripRows[tripRows.length - 1]?.stop_id ?? null;
+}
+
+export function inferEffectiveStopSequence(
+  vehicleLat: number,
+  vehicleLon: number,
+  reportedSequence: number,
+  targetSequence: number,
+  tripRows: ScheduledStopTimeRow[],
+  stopPositionLookup: ReadonlyMap<string, { stop_lat: number; stop_lon: number }>,
+): number {
+  let closestSequence = reportedSequence;
+  let closestDistance = Infinity;
+
+  for (const row of tripRows) {
+    if (row.stop_sequence < reportedSequence || row.stop_sequence >= targetSequence) {
+      continue;
+    }
+
+    const pos = stopPositionLookup.get(row.stop_id);
+    if (!pos) {
+      continue;
+    }
+
+    const dist = haversineDistanceMeters(vehicleLat, vehicleLon, pos.stop_lat, pos.stop_lon);
+    if (dist < closestDistance) {
+      closestDistance = dist;
+      closestSequence = row.stop_sequence;
+    }
+  }
+
+  return Math.max(reportedSequence, closestSequence);
 }

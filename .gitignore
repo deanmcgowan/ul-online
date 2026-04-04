@@ -14,7 +14,9 @@ lerna-debug.log*
 !.env.example
 node_modules
 dist
+dist-server
 dist-ssr
+data/
 *.local
 
 # Editor directories and files

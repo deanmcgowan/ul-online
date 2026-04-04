@@ -163,30 +163,70 @@ serve(async (req) => {
 
       const stopTimesText = await zip.file("stop_times.txt")?.async("text");
       if (stopTimesText) {
-        const stopRouteSet = new Set<string>();
+        // Single pass: build stop_routes AND import stop_times simultaneously
         const lines = stopTimesText.trim().split("\n");
         const headers = parseCSVLine(lines[0]);
         const tripIdIdx = headers.indexOf("trip_id");
         const stopIdIdx = headers.indexOf("stop_id");
+        const seqIdx = headers.indexOf("stop_sequence");
+        const arrIdx = headers.indexOf("arrival_time");
+        const depIdx = headers.indexOf("departure_time");
 
+        const stopRouteSet = new Set<string>();
+
+        // Clear old stop_times before re-importing
+        console.log("Clearing old stop_times...");
+        await supabase.from("stop_times").delete().neq("trip_id", "");
+
+        let stBatch: { trip_id: string; stop_id: string; stop_sequence: number; arrival_time: string; departure_time: string }[] = [];
+        let stTotal = 0;
+
+        console.log(`Processing ${lines.length - 1} stop_times rows...`);
         for (let i = 1; i < lines.length; i++) {
           const values = parseCSVLine(lines[i]);
-          const stopId = values[stopIdIdx];
           const tripId = values[tripIdIdx];
-          const routeId = tripToRoute.get(tripId);
+          const stopId = values[stopIdIdx];
+          if (!tripId) continue;
 
+          // Collect stop_routes
+          const routeId = tripToRoute.get(tripId);
           if (stopIds.has(stopId) && routeId) {
             stopRouteSet.add(`${stopId}|||${routeId}`);
           }
-        }
 
+          // Collect stop_times
+          stBatch.push({
+            trip_id: tripId,
+            stop_id: stopId,
+            stop_sequence: parseInt(values[seqIdx]) || 0,
+            arrival_time: values[arrIdx] || "",
+            departure_time: values[depIdx] || "",
+          });
+          if (stBatch.length >= BATCH_SIZE) {
+            const { error } = await supabase.from("stop_times").upsert(stBatch, {
+              onConflict: "trip_id,stop_sequence",
+            });
+            if (error) console.error(`stop_times batch error: ${error.message}`);
+            stTotal += stBatch.length;
+            stBatch = [];
+          }
+        }
+        if (stBatch.length > 0) {
+          const { error } = await supabase.from("stop_times").upsert(stBatch, {
+            onConflict: "trip_id,stop_sequence",
+          });
+          if (error) console.error(`stop_times final batch error: ${error.message}`);
+          stTotal += stBatch.length;
+        }
+        console.log(`Imported ${stTotal} stop_times rows`);
+
+        // Insert stop_routes
         const stopRoutes = Array.from(stopRouteSet).map((key) => {
           const [stop_id, route_id] = key.split("|||");
           return { stop_id, route_id };
         });
 
         console.log(`Found ${stopRoutes.length} stop-route associations`);
-
         for (let i = 0; i < stopRoutes.length; i += BATCH_SIZE) {
           const batch = stopRoutes.slice(i, i + BATCH_SIZE);
           const { error } = await supabase

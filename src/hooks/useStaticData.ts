@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
-import { supabase } from "@/integrations/supabase/client";
+import { fetchStaticData } from "@/lib/api";
 import type { TransitStop } from "@/components/BusMap";
 import { loadStaticDataSnapshot, saveStaticDataSnapshot } from "@/lib/staticDataCache";
 
@@ -93,9 +93,7 @@ export function useStaticData(): StaticData {
         }
         await yieldToUI();
 
-        const { data, error } = await supabase.functions.invoke("static-data", {
-          body: { hash: cachedHash },
-        });
+        const { data, error } = await fetchStaticData({ hash: cachedHash });
 
         if (error) throw error;
         if (cancelledRef.current) return;
@@ -104,6 +102,14 @@ export function useStaticData(): StaticData {
           updateItem("check", "done", strings.upToDate);
           setTimeout(() => { if (!cancelledRef.current) setChecklist([]); }, 1500);
           return;
+        }
+
+        // Server says unchanged but we have no usable cache — force full refetch
+        if (data.unchanged && !hasCachedSnapshot) {
+          const { data: freshData, error: freshError } = await fetchStaticData({ hash: "" });
+          if (freshError) throw freshError;
+          if (cancelledRef.current) return;
+          Object.assign(data, freshData);
         }
 
         // New data arrived — process it
@@ -140,13 +146,16 @@ export function useStaticData(): StaticData {
           await yieldToUI();
         }
 
-        await saveStaticDataSnapshot({
-          hash: data.hash || cachedHash,
-          stops: nextStops,
-          routeMap: nextRouteMap,
-          stopRoutes: nextStopRoutes,
-          updatedAt: Date.now(),
-        });
+        // Only save snapshot if we got actual data
+        if (nextStops.length > 0) {
+          await saveStaticDataSnapshot({
+            hash: data.hash || cachedHash,
+            stops: nextStops,
+            routeMap: nextRouteMap,
+            stopRoutes: nextStopRoutes,
+            updatedAt: Date.now(),
+          });
+        }
 
         if (hasCachedSnapshot) {
           updateItem("check", "done", strings.updatedToLatest);

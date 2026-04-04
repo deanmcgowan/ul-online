@@ -164,7 +164,16 @@ function isSameVisualStopGroup(stop: TransitStop, candidate: TransitStop): boole
     return false;
   }
 
-  return getSharedTokenCount(stop.stop_name, candidate.stop_name) >= 2;
+  const leftTokens = normalizeStopName(stop.stop_name);
+  const rightTokens = normalizeStopName(candidate.stop_name);
+  const shared = getSharedTokenCount(stop.stop_name, candidate.stop_name);
+
+  // If the shorter name is fully contained in the longer name's tokens, merge.
+  // Otherwise require at least 2 shared tokens to avoid false merges.
+  const minTokenCount = Math.min(leftTokens.length, rightTokens.length);
+  const minShared = minTokenCount <= 1 ? 1 : 2;
+
+  return shared >= minShared;
 }
 
 export function buildStopGroups(

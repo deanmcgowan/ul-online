@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TransitStop, Vehicle } from "@/components/BusMap";
 import { buildFallbackArrivalEstimate, getRemainingArrivalSeconds, pickBestUpcomingStopMatch, pickPreferredDestinationName, stabilizeArrivalEstimate } from "@/components/StopPopup";
 import type { TransitPlatformGroup } from "@/lib/stopGroups";
-import { estimateRemainingTripSeconds, parseGtfsTimeToSeconds } from "@/lib/tripSchedules";
+import { estimateRemainingTripSeconds, inferEffectiveStopSequence, parseGtfsTimeToSeconds } from "@/lib/tripSchedules";
 
 function createStop(overrides: Partial<TransitStop>): TransitStop {
   return {
@@ -253,6 +253,36 @@ describe("buildFallbackArrivalEstimate", () => {
 
     expect(estimate).toBeNull();
   });
+
+  it("ignores a vehicle that has reached its terminal stop", () => {
+    const platform = createPlatformGroup();
+    const vehicle = createVehicle({
+      routeId: "route-1",
+      tripId: "trip-1",
+      currentStopSequence: 20,
+      lat: platform.stop_lat - 0.002,
+      lon: platform.stop_lon,
+      bearing: 0,
+      speed: 8,
+    });
+
+    const estimate = buildFallbackArrivalEstimate(
+      platform,
+      [vehicle],
+      { "route-1": "100" },
+      new Map([
+        [
+          "trip-1",
+          [
+            { trip_id: "trip-1", stop_id: "stop-x", stop_sequence: 10, arrival_time: "12:00:00", departure_time: "12:00:30" },
+            { trip_id: "trip-1", stop_id: "terminal", stop_sequence: 20, arrival_time: "12:16:00", departure_time: null },
+          ],
+        ],
+      ]),
+    );
+
+    expect(estimate).toBeNull();
+  });
 });
 
 describe("trip schedule timing", () => {
@@ -305,5 +335,86 @@ describe("pickPreferredDestinationName", () => {
     );
 
     expect(destinationName).toBeNull();
+  });
+});
+
+describe("inferEffectiveStopSequence", () => {
+  const stopPositions = new Map([
+    ["stop-1", { stop_lat: 59.850, stop_lon: 17.630 }],
+    ["stop-2", { stop_lat: 59.853, stop_lon: 17.633 }],
+    ["stop-3", { stop_lat: 59.856, stop_lon: 17.636 }],
+    ["stop-4", { stop_lat: 59.859, stop_lon: 17.639 }],
+    ["stop-5", { stop_lat: 59.862, stop_lon: 17.642 }],
+  ]);
+
+  const tripRows = [
+    { trip_id: "trip-1", stop_id: "stop-1", stop_sequence: 10, arrival_time: "12:00:00", departure_time: "12:00:30" },
+    { trip_id: "trip-1", stop_id: "stop-2", stop_sequence: 11, arrival_time: "12:02:00", departure_time: "12:02:20" },
+    { trip_id: "trip-1", stop_id: "stop-3", stop_sequence: 12, arrival_time: "12:04:00", departure_time: "12:04:20" },
+    { trip_id: "trip-1", stop_id: "stop-4", stop_sequence: 13, arrival_time: "12:06:00", departure_time: "12:06:20" },
+    { trip_id: "trip-1", stop_id: "stop-5", stop_sequence: 14, arrival_time: "12:08:00", departure_time: "12:08:20" },
+  ];
+
+  it("advances the effective sequence when the bus is physically near a later stop", () => {
+    const effective = inferEffectiveStopSequence(
+      59.856, 17.636, // near stop-3
+      10, 14, tripRows, stopPositions,
+    );
+
+    expect(effective).toBe(12);
+  });
+
+  it("never goes below the reported sequence", () => {
+    const effective = inferEffectiveStopSequence(
+      59.850, 17.630, // near stop-1 (reported sequence)
+      10, 14, tripRows, stopPositions,
+    );
+
+    expect(effective).toBe(10);
+  });
+
+  it("does not advance past the target sequence", () => {
+    const effective = inferEffectiveStopSequence(
+      59.862, 17.642, // right at stop-5 (target)
+      10, 14, tripRows, stopPositions,
+    );
+
+    // Should return 13 (stop-4), not 14 (the target itself is excluded)
+    expect(effective).toBe(13);
+  });
+
+  it("keeps reported sequence when positions are unavailable", () => {
+    const emptyPositions = new Map<string, { stop_lat: number; stop_lon: number }>();
+    const effective = inferEffectiveStopSequence(
+      59.856, 17.636,
+      10, 14, tripRows, emptyPositions,
+    );
+
+    expect(effective).toBe(10);
+  });
+
+  it("reduces scheduled ETA when bus has progressed past reported stop", () => {
+    // Bus reported at stop-1 (seq 10), but physically near stop-3 (seq 12)
+    const vehicle = createVehicle({
+      tripId: "trip-1",
+      currentStopSequence: 10,
+      currentStatus: "IN_TRANSIT_TO",
+      lat: 59.856,
+      lon: 17.636,
+    });
+
+    const effectiveSequence = inferEffectiveStopSequence(
+      vehicle.lat, vehicle.lon,
+      vehicle.currentStopSequence, 14, tripRows, stopPositions,
+    );
+
+    const effectiveVehicle = { ...vehicle, currentStopSequence: effectiveSequence, currentStatus: "IN_TRANSIT_TO" as const };
+
+    const staleEta = estimateRemainingTripSeconds(vehicle, tripRows, 14);
+    const adjustedEta = estimateRemainingTripSeconds(effectiveVehicle, tripRows, 14);
+
+    // Stale: 12:08 - 12:00 = 480s, Adjusted: 12:08 - 12:04 = 240s
+    expect(staleEta).toBe(480);
+    expect(adjustedEta).toBe(240);
   });
 });
