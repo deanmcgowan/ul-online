@@ -1,0 +1,18 @@
+# Cloud Build ignore file
+# Based on .gitignore but allows data/gtfs.db for Docker image seeding
+node_modules/
+dist/
+dist-server/
+.git/
+.vscode/
+.DS_Store
+npm-debug.log*
+.env
+.env.*
+coverage/
+playwright-report/
+test-results/
+bun.lockb
+supabase/
+data/*
+!data/gtfs.db
