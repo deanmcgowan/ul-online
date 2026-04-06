@@ -206,9 +206,10 @@ const BusMap = ({
     return processedStopGroups.filter((stopGroup) => stopIsInExtent(stopGroup, paddedExtent));
   }, [processedStopGroups, stopViewportVersion, stopVisibilityZoom]);
 
-  const getVehicleStyle = useCallback((lineNumber: string, bearing: number, isToward?: boolean) => {
+  const getVehicleStyle = useCallback((lineNumber: string, bearing: number, isToward?: boolean, currentStatus?: string) => {
     const bearingBucket = ((Math.round(bearing / VEHICLE_ICON_BUCKET) * VEHICLE_ICON_BUCKET) % 360 + 360) % 360;
-    const styleKey = `${lineNumber}|${bearingBucket}|${isToward ?? "unknown"}`;
+    const statusKey = currentStatus === "STOPPED_AT" ? "S" : currentStatus === "IN_TRANSIT_TO" || currentStatus === "INCOMING_AT" ? "D" : "U";
+    const styleKey = `${lineNumber}|${bearingBucket}|${isToward ?? "unknown"}|${statusKey}`;
     const cached = vehicleStyleCacheRef.current.get(styleKey);
     if (cached) {
       return { style: cached, styleKey };
@@ -216,7 +217,7 @@ const BusMap = ({
 
     const style = new Style({
       image: new Icon({
-        img: createBusCanvas(lineNumber, bearingBucket, isToward),
+        img: createBusCanvas(lineNumber, bearingBucket, isToward, currentStatus),
         size: [64, 64],
         anchor: [0.5, 0.5],
       }),
@@ -474,7 +475,9 @@ const BusMap = ({
     const nextIds = new Set<string>();
 
     vehicles.forEach((v) => {
-      const lineNumber = routeMap[v.routeId] || v.vehicleLabel || "?";
+      // Primary: routeMap from static data. Fallback: use routeId from trip updates (same RT feed).
+      const tripDelayRouteId = tripDelayMap?.get(v.tripId)?.routeId;
+      const lineNumber = routeMap[v.routeId] || (tripDelayRouteId ? routeMap[tripDelayRouteId] : "") || v.vehicleLabel || "?";
 
       let isToward: boolean | undefined;
       if (filteredStop) {
@@ -514,7 +517,7 @@ const BusMap = ({
         true
       );
 
-      const { style, styleKey } = getVehicleStyle(lineNumber, v.bearing, isToward);
+      const { style, styleKey } = getVehicleStyle(lineNumber, v.bearing, isToward, v.currentStatus);
       if (feature.get("styleKey") !== styleKey) {
         feature.set("styleKey", styleKey, true);
         feature.setStyle(style);
@@ -529,7 +532,7 @@ const BusMap = ({
         featureMap.delete(vehicleId);
       }
     }
-  }, [vehicles, routeMap, filteredStop, getVehicleStyle]);
+  }, [vehicles, routeMap, filteredStop, getVehicleStyle, tripDelayMap]);
 
   // Update stops in chunks to avoid blocking main thread
   useEffect(() => {

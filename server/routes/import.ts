@@ -60,7 +60,7 @@ export async function runGtfsImport(): Promise<{
 
   const db = getDb();
 
-  const url = `https://opendata.samtrafiken.se/gtfs/ul/ul.zip?key=${apiKey}`;
+  const url = `https://opendata.samtrafiken.se/gtfs-sweden/ul/ul.zip?key=${apiKey}`;
   console.log("Downloading GTFS Sweden 3 UL data...");
   const response = await fetch(url);
   if (!response.ok) {
@@ -266,6 +266,15 @@ export async function runGtfsImport(): Promise<{
 }
 
 importRoute.post("/", async (c) => {
+  // Protect against unauthorized downloads (GTFS static has 50/month limit)
+  const adminKey = process.env.ADMIN_API_KEY;
+  if (adminKey) {
+    const auth = c.req.header("Authorization");
+    if (auth !== `Bearer ${adminKey}`) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+  }
+
   try {
     const result = await runGtfsImport();
     return c.json(result);

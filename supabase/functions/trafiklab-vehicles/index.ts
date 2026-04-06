@@ -1,3 +1,8 @@
+// DEPRECATED: This Supabase Edge Function is no longer used.
+// The application now uses the Hono server in server/routes/vehicles.ts
+// which fetches GTFS-RT Sweden 3 vehicle positions directly.
+// This file is kept for reference only and should not be deployed.
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import protobuf from "npm:protobufjs@7.4.0";

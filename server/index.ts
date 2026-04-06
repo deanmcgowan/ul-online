@@ -72,14 +72,40 @@ if (!fs.existsSync(dbDir)) {
 // Ensure DB is initialized on startup
 getDb();
 
-// Auto-import GTFS data if the DB is empty (e.g. fresh Cloud Run revision)
-const stopsCount = getDb().prepare("SELECT COUNT(*) AS n FROM transit_stops").get() as { n: number };
-if (stopsCount.n === 0) {
-  console.log("Empty database detected — running GTFS import on startup...");
-  runGtfsImport()
-    .then((result) => console.log("Startup import complete:", result))
-    .catch((err) => console.error("Startup import failed:", err));
+// Auto-import GTFS data if the DB is empty or stale (>24h)
+const STALE_HOURS = 24;
+let importRunning = false;
+
+function shouldImport(): "empty" | "stale" | false {
+  const db = getDb();
+  const stopsCount = db.prepare("SELECT COUNT(*) AS n FROM transit_stops").get() as { n: number };
+  if (stopsCount.n === 0) return "empty";
+
+  const meta = db.prepare("SELECT updated_at FROM static_data_meta WHERE key = ?").get("combined_hash") as { updated_at: string } | undefined;
+  if (meta?.updated_at) {
+    const age = Date.now() - new Date(meta.updated_at).getTime();
+    if (age > STALE_HOURS * 60 * 60 * 1000) return "stale";
+  }
+  return false;
 }
+
+function triggerImportIfNeeded() {
+  if (importRunning) return;
+  const reason = shouldImport();
+  if (!reason) return;
+
+  importRunning = true;
+  console.log(`GTFS data ${reason} — running import...`);
+  runGtfsImport()
+    .then((result) => console.log("Import complete:", result))
+    .catch((err) => console.error("Import failed:", err))
+    .finally(() => { importRunning = false; });
+}
+
+triggerImportIfNeeded();
+
+// Check for stale data once per day (static GTFS download limit: 50/month)
+setInterval(triggerImportIfNeeded, 24 * 60 * 60 * 1000);
 
 const port = parseInt(process.env.PORT || "3000", 10);
 
