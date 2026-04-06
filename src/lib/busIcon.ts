@@ -2,7 +2,7 @@ export function createBusCanvas(
   lineNumber: string,
   bearing: number,
   isToward?: boolean,
-  currentStatus?: string
+  speed?: number
 ): HTMLCanvasElement {
   const size = 64;
   const canvas = document.createElement("canvas");
@@ -65,23 +65,11 @@ export function createBusCanvas(
   ctx.textBaseline = "middle";
   ctx.fillText(lineNumber, cx, cy + 1);
 
-  // Status indicator dot (top-right of bus body)
-  if (currentStatus === "STOPPED_AT") {
-    // Red dot — bus is stopped at a stop
+  // Status indicator dot (top-right of bus body) based on speed
+  if (speed !== undefined) {
     const dotX = bx + bodyWidth - 2;
     const dotY = by + 2;
-    ctx.fillStyle = "#dc2626";
-    ctx.beginPath();
-    ctx.arc(dotX, dotY, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  } else if (currentStatus === "IN_TRANSIT_TO" || currentStatus === "INCOMING_AT") {
-    // Green dot — bus is driving
-    const dotX = bx + bodyWidth - 2;
-    const dotY = by + 2;
-    ctx.fillStyle = "#16a34a";
+    ctx.fillStyle = speed > 0.5 ? "#16a34a" : "#dc2626"; // green=moving, red=stopped
     ctx.beginPath();
     ctx.arc(dotX, dotY, 4, 0, Math.PI * 2);
     ctx.fill();

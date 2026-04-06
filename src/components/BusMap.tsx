@@ -206,10 +206,10 @@ const BusMap = ({
     return processedStopGroups.filter((stopGroup) => stopIsInExtent(stopGroup, paddedExtent));
   }, [processedStopGroups, stopViewportVersion, stopVisibilityZoom]);
 
-  const getVehicleStyle = useCallback((lineNumber: string, bearing: number, isToward?: boolean, currentStatus?: string) => {
+  const getVehicleStyle = useCallback((lineNumber: string, bearing: number, isToward?: boolean, speed?: number) => {
     const bearingBucket = ((Math.round(bearing / VEHICLE_ICON_BUCKET) * VEHICLE_ICON_BUCKET) % 360 + 360) % 360;
-    const statusKey = currentStatus === "STOPPED_AT" ? "S" : currentStatus === "IN_TRANSIT_TO" || currentStatus === "INCOMING_AT" ? "D" : "U";
-    const styleKey = `${lineNumber}|${bearingBucket}|${isToward ?? "unknown"}|${statusKey}`;
+    const speedKey = speed !== undefined ? (speed > 0.5 ? "D" : "S") : "U";
+    const styleKey = `${lineNumber}|${bearingBucket}|${isToward ?? "unknown"}|${speedKey}`;
     const cached = vehicleStyleCacheRef.current.get(styleKey);
     if (cached) {
       return { style: cached, styleKey };
@@ -217,7 +217,7 @@ const BusMap = ({
 
     const style = new Style({
       image: new Icon({
-        img: createBusCanvas(lineNumber, bearingBucket, isToward, currentStatus),
+        img: createBusCanvas(lineNumber, bearingBucket, isToward, speed),
         size: [64, 64],
         anchor: [0.5, 0.5],
       }),
@@ -517,7 +517,7 @@ const BusMap = ({
         true
       );
 
-      const { style, styleKey } = getVehicleStyle(lineNumber, v.bearing, isToward, v.currentStatus);
+      const { style, styleKey } = getVehicleStyle(lineNumber, v.bearing, isToward, v.speed);
       if (feature.get("styleKey") !== styleKey) {
         feature.set("styleKey", styleKey, true);
         feature.setStyle(style);

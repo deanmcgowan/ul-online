@@ -72,8 +72,9 @@ if (!fs.existsSync(dbDir)) {
 // Ensure DB is initialized on startup
 getDb();
 
-// Auto-import GTFS data if the DB is empty or stale (>24h)
-const STALE_HOURS = 24;
+// Auto-import GTFS data if the DB is empty (no seeded data) or very stale (>7 days)
+// Static GTFS download limit: 50/month — be conservative with re-downloads
+const STALE_DAYS = 7;
 let importRunning = false;
 
 function shouldImport(): "empty" | "stale" | false {
@@ -84,7 +85,7 @@ function shouldImport(): "empty" | "stale" | false {
   const meta = db.prepare("SELECT updated_at FROM static_data_meta WHERE key = ?").get("combined_hash") as { updated_at: string } | undefined;
   if (meta?.updated_at) {
     const age = Date.now() - new Date(meta.updated_at).getTime();
-    if (age > STALE_HOURS * 60 * 60 * 1000) return "stale";
+    if (age > STALE_DAYS * 24 * 60 * 60 * 1000) return "stale";
   }
   return false;
 }

@@ -30,8 +30,11 @@ COPY --from=build /app/dist ./dist
 # Copy compiled server
 COPY --from=build /app/dist-server ./dist-server
 
-# Data directory for SQLite (use a volume in Cloud Run)
+# Data directory for SQLite
 RUN mkdir -p /app/data
+
+# Seed with pre-built GTFS database if available (avoids Trafiklab rate limits)
+COPY data/gtfs.db* /app/data/
 
 ENV NODE_ENV=production
 ENV PORT=8080

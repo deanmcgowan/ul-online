@@ -1,7 +1,8 @@
 node_modules
 dist
 dist-server
-data
+data/*
+!data/gtfs.db
 .git
 .vscode
 .DS_Store
