@@ -289,15 +289,15 @@ export default function CommuteDashboard({
           </Button>
         </SheetTrigger>
 
-        <SheetContent side="right" className="!inset-y-4 !w-[min(26rem,calc(100vw-2rem))] overflow-y-auto rounded-l-2xl">
-          <SheetHeader className="border-b px-5 py-4">
+        <SheetContent side="right" className="!inset-y-4 !right-4 !h-[calc(100dvh-2rem)] !w-[min(26rem,calc(100vw-2.5rem))] !border !rounded-2xl !p-0 flex flex-col shadow-2xl overflow-hidden">
+          <SheetHeader className="shrink-0 border-b px-5 py-4">
             <SheetTitle>{strings.commuteDashboardTitle}</SheetTitle>
             <SheetDescription>
               {strings.commuteDashboardEmptyDescription}
             </SheetDescription>
           </SheetHeader>
 
-          <div className="space-y-4 p-4">
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-4 p-4">
             {plans.map((plan) => {
               const OriginIcon = plan.origin.id === "__current_location__" ? Navigation : getPlaceIcon(plan.origin);
               const DestinationIcon = getPlaceIcon(plan.destination);
