@@ -168,6 +168,7 @@ export interface AppStrings {
   notificationsBlocked: string;
   notificationsUnsupported: string;
   notifyInstallRequired: string;
+}
 
 const STRINGS: Record<SupportedLanguage, AppStrings> = {
   "en-GB": {
