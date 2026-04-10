@@ -92,6 +92,15 @@ interface TrafikverketSituation {
 
 export const situationsRoute = new Hono();
 
+// In-memory cache: keyed by request params, 30s TTL
+let cache: {
+  key: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: any;
+  fetchedAt: number;
+} | null = null;
+const CACHE_TTL_MS = 30_000;
+
 situationsRoute.post("/", async (c) => {
   const apiKey = process.env.TRAFIKVERKET_OPEN_DATA_API_KEY;
   if (!apiKey) {
@@ -107,6 +116,11 @@ situationsRoute.post("/", async (c) => {
     20000
   );
   const limit = clamp(Number(body.limit ?? DEFAULT_LIMIT), 1, 20);
+
+  const cacheKey = `${lat},${lon},${radiusMeters},${limit}`;
+  if (cache && cache.key === cacheKey && Date.now() - cache.fetchedAt < CACHE_TTL_MS) {
+    return c.json(cache.data);
+  }
 
   const response = await fetch(TRAFIKVERKET_ENDPOINT, {
     method: "POST",
@@ -199,8 +213,10 @@ situationsRoute.post("/", async (c) => {
     })
     .slice(0, limit);
 
-  return c.json({
+  const result = {
     situations: sortedSituations,
     fetchedAt: new Date().toISOString(),
-  });
+  };
+  cache = { key: cacheKey, data: result, fetchedAt: Date.now() };
+  return c.json(result);
 });

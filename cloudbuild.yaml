@@ -1,13 +1,23 @@
 steps:
+  # ── Fetch build-time secrets ────────────────────────────────
+  - name: "gcr.io/cloud-builders/gcloud"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        gcloud secrets versions access latest --secret=VITE_GOOGLE_STREETVIEW_KEY > /workspace/.streetview_key
+
   # ── Build & push container ──────────────────────────────────
   - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
     args:
-      - "build"
-      - "-t"
-      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_TAG}"
-      - "-t"
-      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest"
-      - "."
+      - "-c"
+      - |
+        docker build \
+          --build-arg VITE_GOOGLE_STREETVIEW_KEY="$(cat /workspace/.streetview_key)" \
+          -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_TAG} \
+          -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest \
+          .
 
   - name: "gcr.io/cloud-builders/docker"
     args:

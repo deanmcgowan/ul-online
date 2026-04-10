@@ -7,6 +7,8 @@ export interface SavedPlace {
   displayName: string;
   lat: number;
   lon: number;
+  preferredStopId?: string;
+  preferredStopName?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -129,6 +131,8 @@ export function upsertSavedPlace(currentPlaces: SavedPlace[], draft: SavedPlaceD
     displayName: draft.displayName.trim(),
     lat: draft.lat,
     lon: draft.lon,
+    preferredStopId: draft.preferredStopId,
+    preferredStopName: draft.preferredStopName,
     createdAt: existing?.createdAt ?? Date.now(),
     updatedAt: Date.now(),
   };

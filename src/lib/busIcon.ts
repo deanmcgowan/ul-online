@@ -1,8 +1,6 @@
-export function createBusCanvas(
-  lineNumber: string,
+export function createBusArrowCanvas(
   bearing: number,
   isToward?: boolean,
-  speed?: number
 ): HTMLCanvasElement {
   const size = 64;
   const canvas = document.createElement("canvas");
@@ -32,6 +30,21 @@ export function createBusCanvas(
   ctx.closePath();
   ctx.fill();
   ctx.restore();
+
+  return canvas;
+}
+
+export function createBusBodyCanvas(
+  lineNumber: string,
+  speed?: number,
+): HTMLCanvasElement {
+  const size = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  const cx = size / 2;
+  const cy = size / 2;
 
   // Measure text to size the body
   ctx.font = "bold 12px system-ui, -apple-system, sans-serif";

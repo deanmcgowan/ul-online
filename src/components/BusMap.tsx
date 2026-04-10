@@ -1,13 +1,12 @@
 import { useRef, useEffect, useState, useCallback, useMemo, lazy, Suspense } from "react";
 import Map from "ol/Map";
 import View from "ol/View";
-import TileLayer from "ol/layer/Tile";
 import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
-import OSM from "ol/source/OSM";
+import { apply as applyMapboxStyle } from "ol-mapbox-style";
 import Feature from "ol/Feature";
 import Point from "ol/geom/Point";
-import { fromLonLat, transformExtent } from "ol/proj";
+import { fromLonLat, toLonLat, transformExtent } from "ol/proj";
 import {
   Style,
   Fill,
@@ -21,11 +20,12 @@ import BottomSheet from "@/components/BottomSheet";
 import ClusterSource from "ol/source/Cluster";
 import { circular } from "ol/geom/Polygon";
 import { boundingExtent } from "ol/extent";
-import { createBusCanvas, bearingTowardStop } from "@/lib/busIcon";
+import { createBusArrowCanvas, createBusBodyCanvas, bearingTowardStop } from "@/lib/busIcon";
 import { Button } from "@/components/ui/button";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import StopPopup from "@/components/StopPopup";
 import { buildStopGroups, findStopGroupForStop, type TransitStopGroup } from "@/lib/stopGroups";
+import type { SavedPlace, SavedPlaceKind } from "@/lib/savedPlaces";
 import { defaults as defaultControls } from "ol/control";
 import "ol/ol.css";
 
@@ -33,6 +33,23 @@ const BusPopup = lazy(() => import("@/components/BusPopup"));
 const VEHICLE_ICON_BUCKET = 15;
 const STOP_CLUSTER_DISTANCE = 34;
 const CLUSTER_SPLIT_PIXEL_BUFFER = 8;
+const MAP_VIEW_STORAGE_KEY = "ul-online-map-view";
+
+const DEFAULT_CENTER: [number, number] = [17.63, 59.86];
+const DEFAULT_ZOOM = 13;
+
+function getSavedMapView(): { center: [number, number]; zoom: number } {
+  try {
+    const raw = localStorage.getItem(MAP_VIEW_STORAGE_KEY);
+    if (raw) {
+      const { center, zoom } = JSON.parse(raw);
+      if (Array.isArray(center) && center.length === 2 && typeof zoom === "number") {
+        return { center: center as [number, number], zoom };
+      }
+    }
+  } catch { /* ignore */ }
+  return { center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM };
+}
 
 function padExtent(extent: [number, number, number, number], factor: number): [number, number, number, number] {
   const width = extent[2] - extent[0];
@@ -137,6 +154,9 @@ interface BusMapProps {
   stopRoutes?: Record<string, string[]>;
   highlightedStop?: TransitStop | null;
   tripDelayMap?: Map<string, TripDelay>;
+  savedPlaces?: SavedPlace[];
+  lastRefresh?: number;
+  refreshIntervalMs?: number;
 }
 
 const BusMap = ({
@@ -158,6 +178,9 @@ const BusMap = ({
   stopRoutes = {},
   highlightedStop = null,
   tripDelayMap,
+  savedPlaces = [],
+  lastRefresh,
+  refreshIntervalMs,
 }: BusMapProps) => {
   const { strings } = useAppPreferences();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -169,8 +192,9 @@ const BusMap = ({
   const stopsRawSourceRef = useRef(new VectorSource());
   const userSourceRef = useRef(new VectorSource());
   const bufferSourceRef = useRef(new VectorSource());
+  const savedPlacesSourceRef = useRef(new VectorSource());
   const vehicleFeaturesRef = useRef(new globalThis.Map<string, Feature<Point>>());
-  const vehicleStyleCacheRef = useRef(new globalThis.Map<string, Style>());
+  const vehicleStyleCacheRef = useRef(new globalThis.Map<string, Style[]>());
 
   const vehicleLayerRef = useRef<VectorLayer<any> | null>(null);
   const stopsLayerRef = useRef<VectorLayer<ClusterSource> | null>(null);
@@ -180,6 +204,9 @@ const BusMap = ({
     type: "stop" | "bus";
     data: any;
   } | null>(null);
+  const [isTrackingBus, setIsTrackingBus] = useState(true);
+  const isAnimatingRef = useRef(false);
+  const closePopupRef = useRef<() => void>(() => {});
 
   // Memoize filtered + deduplicated stops
   const processedStopGroups = useMemo(() => {
@@ -215,13 +242,25 @@ const BusMap = ({
       return { style: cached, styleKey };
     }
 
-    const style = new Style({
-      image: new Icon({
-        img: createBusCanvas(lineNumber, bearingBucket, isToward, speed),
-        size: [64, 64],
-        anchor: [0.5, 0.5],
+    const style: Style[] = [
+      // Arrow layer: rotates with the map so it always points geographically correct
+      new Style({
+        image: new Icon({
+          img: createBusArrowCanvas(bearingBucket, isToward),
+          size: [64, 64],
+          anchor: [0.5, 0.5],
+          rotateWithView: true,
+        }),
       }),
-    });
+      // Body layer: screen-fixed so line numbers are always readable
+      new Style({
+        image: new Icon({
+          img: createBusBodyCanvas(lineNumber, speed),
+          size: [64, 64],
+          anchor: [0.5, 0.5],
+        }),
+      }),
+    ];
 
     vehicleStyleCacheRef.current.set(styleKey, style);
     return { style, styleKey };
@@ -308,24 +347,49 @@ const BusMap = ({
       zIndex: 20,
     });
 
+    const savedPlacesLayer = new VectorLayer({
+      source: savedPlacesSourceRef.current,
+      zIndex: 15,
+    });
+
+    const savedView = getSavedMapView();
     const map = new Map({
       target: mapContainerRef.current,
       controls: defaultControls({ zoom: false }),
       layers: [
-        new TileLayer({ source: new OSM() }),
         bufferLayer,
         stopsLayer,
+        savedPlacesLayer,
         vehicleLayer,
         userLayer,
       ],
       view: new View({
-        center: fromLonLat([17.63, 59.86]),
-        zoom: 13,
+        center: fromLonLat(savedView.center),
+        zoom: savedView.zoom,
       }),
     });
     mapRef.current = map;
+
+    // Apply OpenFreeMap vector tile base map (labels stay upright when rotated)
+    applyMapboxStyle(map, "https://tiles.openfreemap.org/styles/bright").catch(
+      (err: unknown) => console.warn("Vector tile style failed, map will have no base layer", err),
+    );
+
     onMapReady?.(map);
     setStopViewportVersion((value) => value + 1);
+
+    map.on("moveend", () => {
+      const view = map.getView();
+      const center = view.getCenter();
+      const zoom = view.getZoom();
+      if (center && zoom !== undefined) {
+        const lonLat = toLonLat(center);
+        localStorage.setItem(MAP_VIEW_STORAGE_KEY, JSON.stringify({
+          center: [lonLat[0], lonLat[1]],
+          zoom,
+        }));
+      }
+    });
 
     map.on("singleclick", (e) => {
       let handled = false;
@@ -352,24 +416,61 @@ const BusMap = ({
               delete props.geometry;
               const busCoord = fromLonLat([props.lon, props.lat]);
               setPopup({ type: "bus", data: props });
-              // Center the bus away from the panel: upper half on mobile, right half on desktop
+              setIsTrackingBus(true);
+              // Center the bus away from the panel, zoom in if stops aren't visible
               const mapSize = map.getSize();
               if (mapSize) {
+                const currentZoom = map.getView().getZoom() ?? 13;
+                const needsZoom = currentZoom < stopVisibilityZoom;
+                const targetZoom = needsZoom ? stopVisibilityZoom : currentZoom;
                 const isWide = mapSize[0] >= 768;
                 const targetPixel = isWide
                   ? [(mapSize[0] + 352) / 2, mapSize[1] / 2]  // offset right for 22rem left panel
                   : [mapSize[0] / 2, mapSize[1] * 0.35];      // offset up for bottom sheet
-                const busPixel = map.getPixelFromCoordinate(busCoord);
-                if (busPixel) {
-                  const currentCenter = map.getView().getCenter()!;
-                  const centerPixel = map.getPixelFromCoordinate(currentCenter)!;
-                  const newCenter = map.getCoordinateFromPixel([
-                    centerPixel[0] + (busPixel[0] - targetPixel[0]),
-                    centerPixel[1] + (busPixel[1] - targetPixel[1]),
-                  ]);
-                  if (newCenter) {
-                    map.getView().animate({ center: newCenter, duration: 400 });
-                  }
+                const busRotation = -((props.bearing ?? 0) * Math.PI) / 180;
+
+                if (needsZoom) {
+                  // Zoom + center in one animation, then adjust for panel offset
+                  map.getView().animate(
+                    { center: busCoord, zoom: targetZoom, rotation: busRotation, duration: 400 },
+                    () => {
+                      const busPixelAfter = map.getPixelFromCoordinate(busCoord);
+                      const centerAfter = map.getView().getCenter();
+                      if (busPixelAfter && centerAfter) {
+                        const centerPixelAfter = map.getPixelFromCoordinate(centerAfter);
+                        if (centerPixelAfter) {
+                          const offsetCenter = map.getCoordinateFromPixel([
+                            centerPixelAfter[0] + (busPixelAfter[0] - targetPixel[0]),
+                            centerPixelAfter[1] + (busPixelAfter[1] - targetPixel[1]),
+                          ]);
+                          if (offsetCenter) {
+                            map.getView().animate({ center: offsetCenter, duration: 200 });
+                          }
+                        }
+                      }
+                    },
+                  );
+                } else {
+                  // Two-step: center + rotate first, then adjust for panel offset
+                  map.getView().animate(
+                    { center: busCoord, rotation: busRotation, duration: 400 },
+                    () => {
+                      const busPixelAfter = map.getPixelFromCoordinate(busCoord);
+                      const centerAfter = map.getView().getCenter();
+                      if (busPixelAfter && centerAfter) {
+                        const centerPixelAfter = map.getPixelFromCoordinate(centerAfter);
+                        if (centerPixelAfter) {
+                          const offsetCenter = map.getCoordinateFromPixel([
+                            centerPixelAfter[0] + (busPixelAfter[0] - targetPixel[0]),
+                            centerPixelAfter[1] + (busPixelAfter[1] - targetPixel[1]),
+                          ]);
+                          if (offsetCenter) {
+                            map.getView().animate({ center: offsetCenter, duration: 200 });
+                          }
+                        }
+                      }
+                    },
+                  );
                 }
               }
               onBusClick(props as any);
@@ -419,6 +520,10 @@ const BusMap = ({
                     stops: allStops,
                     routeIds: Array.from(allRouteIds).sort(),
                   };
+                  if (Math.abs(map.getView().getRotation()) > 0.01) {
+                    isAnimatingRef.current = true;
+                    map.getView().animate({ rotation: 0, duration: 300 }, () => { isAnimatingRef.current = false; });
+                  }
                   setPopup({ type: "stop", data: merged });
                   handled = true;
                   return;
@@ -444,6 +549,10 @@ const BusMap = ({
               return;
             }
 
+            if (Math.abs(map.getView().getRotation()) > 0.01) {
+              isAnimatingRef.current = true;
+              map.getView().animate({ rotation: 0, duration: 300 }, () => { isAnimatingRef.current = false; });
+            }
             setPopup({ type: "stop", data: stopGroup });
             handled = true;
           },
@@ -452,18 +561,29 @@ const BusMap = ({
       }
 
       if (!handled) {
-        setPopup(null);
+        closePopupRef.current();
       }
     });
 
     const handleMoveEnd = () => setStopViewportVersion((value) => value + 1);
     map.on("moveend", handleMoveEnd);
 
+    // Detect any user-initiated map interaction to stop auto-tracking
+    const handleUserInteraction = () => {
+      if (!isAnimatingRef.current) {
+        setIsTrackingBus(false);
+      }
+    };
+    map.on("pointerdrag", handleUserInteraction);
+    map.on("movestart", handleUserInteraction);
+
     return () => {
       if (stopRenderFrameRef.current !== null) {
         cancelAnimationFrame(stopRenderFrameRef.current);
       }
       map.un("moveend", handleMoveEnd);
+      map.un("pointerdrag", handleUserInteraction);
+      map.un("movestart", handleUserInteraction);
       map.setTarget(undefined);
     };
   }, []);
@@ -648,6 +768,52 @@ const BusMap = ({
     bufferSourceRef.current.addFeature(runFeature);
   }, [userLocation, walkSpeed, runSpeed, bufferMinutes]);
 
+  // Update saved-place markers
+  useEffect(() => {
+    const source = savedPlacesSourceRef.current;
+    source.clear(true);
+
+    if (savedPlaces.length === 0) return;
+
+    const kindEmoji: Record<SavedPlaceKind, string> = {
+      home: "\u{1F3E0}",
+      work: "\u{1F4BC}",
+      school: "\u{1F393}",
+      other: "\u{2B50}",
+    };
+
+    const features = savedPlaces.map((place) => {
+      const feature = new Feature({
+        geometry: new Point(fromLonLat([place.lon, place.lat])),
+        featureType: "savedPlace",
+        placeId: place.id,
+        placeKind: place.kind,
+        placeLabel: place.label,
+      });
+
+      feature.setStyle(
+        new Style({
+          text: new Text({
+            text: kindEmoji[place.kind] ?? "\u{2B50}",
+            font: "22px sans-serif",
+            offsetY: -2,
+            textAlign: "center",
+            textBaseline: "middle",
+          }),
+          image: new CircleStyle({
+            radius: 16,
+            fill: new Fill({ color: "rgba(255, 255, 255, 0.85)" }),
+            stroke: new Stroke({ color: "rgba(100, 116, 139, 0.7)", width: 1.5 }),
+          }),
+        }),
+      );
+
+      return feature;
+    });
+
+    source.addFeatures(features);
+  }, [savedPlaces]);
+
   useEffect(() => {
     if (!highlightedStop || !mapRef.current) {
       return;
@@ -663,6 +829,7 @@ const BusMap = ({
     mapRef.current.getView().animate({
       center: coordinate,
       zoom: Math.max(mapRef.current.getView().getZoom() ?? 13, 15),
+      rotation: 0,
       duration: 400,
     });
   }, [highlightedStop, processedStopGroups]);
@@ -670,18 +837,22 @@ const BusMap = ({
   // Derive the live vehicle from the vehicles array when a bus popup is open.
   // popup.data stores the initial click data (with lineNumber); liveVehicle
   // always reflects the latest position without triggering popup state changes.
+  // Match by tripId (most stable in GTFS-RT), then vehicleId, then entity id.
   const liveVehicle = useMemo(() => {
     if (!popup || popup.type !== "bus") return null;
     const orig = popup.data as Vehicle & { lineNumber: string };
-    const updated = vehicles.find((veh) => veh.id === orig.id);
+    const updated =
+      vehicles.find((veh) => veh.tripId && veh.tripId === orig.tripId) ??
+      vehicles.find((veh) => veh.vehicleId && veh.vehicleId === orig.vehicleId) ??
+      vehicles.find((veh) => veh.id === orig.id);
     if (!updated) return orig;
     return { ...updated, lineNumber: orig.lineNumber };
   }, [popup, vehicles]);
 
   // Track the live bus position: smoothly center the map so the bus stays
-  // visible away from the panel.
+  // visible away from the panel. Only when isTrackingBus is true.
   useEffect(() => {
-    if (!liveVehicle || !mapRef.current) return;
+    if (!liveVehicle || !mapRef.current || !isTrackingBus) return;
 
     const map = mapRef.current;
     const coord = fromLonLat([liveVehicle.lon, liveVehicle.lat]);
@@ -703,15 +874,109 @@ const BusMap = ({
     const dx = busPixel[0] - targetPixel[0];
     const dy = busPixel[1] - targetPixel[1];
 
-    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+    const targetRotation = -((liveVehicle.bearing ?? 0) * Math.PI) / 180;
+    const currentRotation = map.getView().getRotation();
+    const rotationDiff = Math.abs(targetRotation - currentRotation);
+
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1 || rotationDiff > 0.01) {
       const newCenter = map.getCoordinateFromPixel([centerPixel[0] + dx, centerPixel[1] + dy]);
       if (newCenter) {
-        map.getView().animate({ center: newCenter, duration: 500 });
+        isAnimatingRef.current = true;
+        map.getView().animate({ center: newCenter, rotation: targetRotation, duration: 500 }, () => {
+          isAnimatingRef.current = false;
+        });
       }
     }
-  }, [liveVehicle?.lat, liveVehicle?.lon]);
+  }, [liveVehicle?.lat, liveVehicle?.lon, liveVehicle?.bearing, isTrackingBus]);
 
-  const closePopup = useCallback(() => setPopup(null), []);
+  const closePopup = useCallback(() => {
+    const busCoord = liveVehicle
+      ? fromLonLat([liveVehicle.lon, liveVehicle.lat])
+      : null;
+    setPopup(null);
+    setIsTrackingBus(true);
+    // Animate back to north-up, re-center on the bus's last position
+    if (mapRef.current) {
+      isAnimatingRef.current = true;
+      mapRef.current.getView().animate(
+        { rotation: 0, ...(busCoord ? { center: busCoord } : {}), duration: 400 },
+        () => { isAnimatingRef.current = false; },
+      );
+    }
+  }, [liveVehicle]);
+  closePopupRef.current = closePopup;
+
+  const handleRecenterBus = useCallback(() => {
+    if (!liveVehicle || !mapRef.current) return;
+    const map = mapRef.current;
+    const coord = fromLonLat([liveVehicle.lon, liveVehicle.lat]);
+    const mapSize = map.getSize();
+    if (!mapSize) return;
+
+    const currentZoom = map.getView().getZoom() ?? 13;
+    const needsZoom = currentZoom < stopVisibilityZoom;
+    const targetZoom = needsZoom ? stopVisibilityZoom : currentZoom;
+    const isWide = mapSize[0] >= 768;
+    const targetPixel = isWide
+      ? [(mapSize[0] + 352) / 2, mapSize[1] / 2]
+      : [mapSize[0] / 2, mapSize[1] * 0.35];
+
+    setIsTrackingBus(true);
+    const recenterRotation = -((liveVehicle.bearing ?? 0) * Math.PI) / 180;
+
+    if (needsZoom) {
+      isAnimatingRef.current = true;
+      map.getView().animate(
+        { center: coord, zoom: targetZoom, rotation: recenterRotation, duration: 400 },
+        () => {
+          const busPixelAfter = map.getPixelFromCoordinate(coord);
+          const centerAfter = map.getView().getCenter();
+          if (busPixelAfter && centerAfter) {
+            const centerPixelAfter = map.getPixelFromCoordinate(centerAfter);
+            if (centerPixelAfter) {
+              const offsetCenter = map.getCoordinateFromPixel([
+                centerPixelAfter[0] + (busPixelAfter[0] - targetPixel[0]),
+                centerPixelAfter[1] + (busPixelAfter[1] - targetPixel[1]),
+              ]);
+              if (offsetCenter) {
+                map.getView().animate({ center: offsetCenter, duration: 200 }, () => {
+                  isAnimatingRef.current = false;
+                });
+                return;
+              }
+            }
+          }
+          isAnimatingRef.current = false;
+        },
+      );
+    } else {
+      // Two-step: center + rotate first, then adjust for panel offset
+      isAnimatingRef.current = true;
+      map.getView().animate(
+        { center: coord, rotation: recenterRotation, duration: 400 },
+        () => {
+          const busPixelAfter = map.getPixelFromCoordinate(coord);
+          const centerAfter = map.getView().getCenter();
+          if (busPixelAfter && centerAfter) {
+            const centerPixelAfter = map.getPixelFromCoordinate(centerAfter);
+            if (centerPixelAfter) {
+              const offsetCenter = map.getCoordinateFromPixel([
+                centerPixelAfter[0] + (busPixelAfter[0] - targetPixel[0]),
+                centerPixelAfter[1] + (busPixelAfter[1] - targetPixel[1]),
+              ]);
+              if (offsetCenter) {
+                map.getView().animate({ center: offsetCenter, duration: 200 }, () => {
+                  isAnimatingRef.current = false;
+                });
+                return;
+              }
+            }
+          }
+          isAnimatingRef.current = false;
+        },
+      );
+    }
+  }, [liveVehicle, stopVisibilityZoom]);
 
   return (
     <>
@@ -730,6 +995,8 @@ const BusMap = ({
             maxWalkDistanceMeters={maxWalkDistanceMeters}
             isFavorite={isFavorite}
             onToggleFavorite={onToggleFavorite}
+            lastRefresh={lastRefresh}
+            refreshIntervalMs={refreshIntervalMs}
             onFilter={(selectedStopGroup) => {
               onStopClick(selectedStopGroup);
               setPopup(null);
@@ -743,6 +1010,10 @@ const BusMap = ({
               stops={stops}
               routeMap={routeMap}
               tripDelay={tripDelayMap?.get(liveVehicle.tripId) ?? null}
+              isTracking={isTrackingBus}
+              onRecenter={handleRecenterBus}
+              lastRefresh={lastRefresh}
+              refreshIntervalMs={refreshIntervalMs}
             />
           </Suspense>
         ) : null}

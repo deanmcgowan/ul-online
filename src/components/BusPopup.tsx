@@ -1,9 +1,10 @@
 import { useEffect, useState, useMemo, useRef } from "react";
-import { Loader2, MapPin, AlertTriangle } from "lucide-react";
+import { Loader2, MapPin, AlertTriangle, Bus, Crosshair } from "lucide-react";
 import type { Vehicle, TransitStop } from "@/components/BusMap";
 import type { TripDelay } from "@/hooks/useTripUpdates";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { fetchStopTimes } from "@/lib/api";
+import RefreshTimer from "@/components/RefreshTimer";
 
 interface BusPopupProps {
   vehicle: Vehicle & { lineNumber: string };
@@ -11,6 +12,10 @@ interface BusPopupProps {
   stops: TransitStop[];
   routeMap: Record<string, string>;
   tripDelay: TripDelay | null;
+  isTracking?: boolean;
+  onRecenter?: () => void;
+  lastRefresh?: number;
+  refreshIntervalMs?: number;
 }
 
 interface StopTimeRow {
@@ -93,12 +98,17 @@ const BusPopup = ({
   stops,
   routeMap,
   tripDelay,
+  isTracking = true,
+  onRecenter,
+  lastRefresh,
+  refreshIntervalMs,
 }: BusPopupProps) => {
   const { strings } = useAppPreferences();
   // Full schedule for the trip — fetched once per tripId
   const [schedule, setSchedule] = useState<StopTimeRow[]>([]);
   const [loadingStops, setLoadingStops] = useState(false);
   const fetchedTripRef = useRef<string>("");
+  const highWaterIdxRef = useRef<number>(0);
   const stopById = useMemo(() => new Map(stops.map((s) => [s.stop_id, s])), [stops]);
 
   // Fetch full schedule ONCE per tripId
@@ -106,6 +116,7 @@ const BusPopup = ({
     if (!vehicle.tripId || vehicle.tripId === fetchedTripRef.current) return;
     fetchedTripRef.current = vehicle.tripId;
 
+    highWaterIdxRef.current = 0;
     let cancelled = false;
     setLoadingStops(true);
 
@@ -121,26 +132,28 @@ const BusPopup = ({
 
   // Derive upcoming stops from cached schedule + current vehicle position.
   // Re-computes whenever the bus moves or its GTFS RT stop sequence updates.
+  // Uses both RT stop sequence and GPS proximity, taking the more advanced position.
   const nextStops = useMemo((): NextStopEntry[] => {
     if (schedule.length === 0) return [];
 
-    let nextIdx = -1;
+    let rtIdx = -1;
+    let gpsIdx = -1;
 
-    // Method 1: GTFS RT currentStopSequence — most authoritative
+    // Method 1: GTFS RT currentStopSequence
     if (vehicle.currentStopSequence > 0) {
       const idx = schedule.findIndex((row) => row.stop_sequence >= vehicle.currentStopSequence);
       if (idx >= 0) {
         const isExact = schedule[idx].stop_sequence === vehicle.currentStopSequence;
         if (isExact && vehicle.currentStatus === "STOPPED_AT" && idx < schedule.length - 1) {
-          nextIdx = idx + 1;
+          rtIdx = idx + 1;
         } else {
-          nextIdx = idx;
+          rtIdx = idx;
         }
       }
     }
 
-    // Method 2: GPS proximity fallback
-    if (nextIdx < 0 && vehicle.lat && vehicle.lon) {
+    // Method 2: GPS proximity — always run to supplement RT data
+    if (vehicle.lat && vehicle.lon) {
       let nearestIdx = 0;
       let nearestDist = Infinity;
       for (let i = 0; i < schedule.length; i++) {
@@ -152,13 +165,30 @@ const BusPopup = ({
           nearestIdx = i;
         }
       }
-      nextIdx = nearestIdx;
-      if (nearestDist < 200 && nearestIdx < schedule.length - 1) {
-        nextIdx++;
+      gpsIdx = nearestIdx;
+      if (nearestDist < 100 && nearestIdx < schedule.length - 1) {
+        gpsIdx++;
       }
     }
 
-    if (nextIdx < 0) nextIdx = 0;
+    // Take the more advanced position from both methods
+    let nextIdx: number;
+    if (rtIdx >= 0 && gpsIdx >= 0) {
+      nextIdx = Math.max(rtIdx, gpsIdx);
+    } else if (rtIdx >= 0) {
+      nextIdx = rtIdx;
+    } else if (gpsIdx >= 0) {
+      nextIdx = gpsIdx;
+    } else {
+      nextIdx = 0;
+    }
+
+    // Monotonic: never go backwards (prevents jitter from GPS noise)
+    if (nextIdx < highWaterIdxRef.current) {
+      nextIdx = highWaterIdxRef.current;
+    } else {
+      highWaterIdxRef.current = nextIdx;
+    }
 
     // If we're past all stops, show the last few
     if (nextIdx >= schedule.length) {
@@ -238,10 +268,20 @@ const BusPopup = ({
 
   return (
     <div>
-      <h3 className="font-semibold text-sm">{strings.line} {vehicle.lineNumber}</h3>
-      {destination ? (
-        <p className="text-xs text-muted-foreground mt-0.5">{strings.headingTo(destination)}</p>
-      ) : null}
+      <div className="flex items-start gap-2.5">
+        <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-900/40">
+          <Bus className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-semibold text-sm">{strings.line} {vehicle.lineNumber}</h3>
+          {destination ? (
+            <p className="text-xs text-muted-foreground mt-0.5">{strings.headingTo(destination)}</p>
+          ) : null}
+        </div>
+        {lastRefresh != null && refreshIntervalMs != null && (
+          <RefreshTimer intervalMs={refreshIntervalMs} lastRefresh={lastRefresh} compact />
+        )}
+      </div>
 
       {tripDelay?.canceled ? (
         <div className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-destructive">
@@ -260,6 +300,19 @@ const BusPopup = ({
       ) : effectiveDelay != null && Math.abs(effectiveDelay) < 30 ? (
         <p className="mt-1 text-xs text-green-600">{strings.onTime}</p>
       ) : null}
+
+      <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <span>{vehicle.speed > 0.5 ? `${Math.round(vehicle.speed * 3.6)} km/h` : strings.stopped}</span>
+        {!isTracking && onRecenter && (
+          <button
+            onClick={onRecenter}
+            className="ml-auto flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/20 transition-colors"
+          >
+            <Crosshair className="h-3 w-3" />
+            <span>Centre</span>
+          </button>
+        )}
+      </div>
 
       {loadingStops ? (
         <div className="mt-2 pt-2 border-t flex items-center gap-2 text-xs text-muted-foreground">
@@ -308,6 +361,18 @@ const BusPopup = ({
           </div>
         </div>
       ) : null}
+
+      {/* Google Street View */}
+      {import.meta.env.VITE_GOOGLE_STREETVIEW_KEY && (
+        <div className="mt-3 rounded-md overflow-hidden">
+          <img
+            className="w-full h-auto block"
+            src={`https://maps.googleapis.com/maps/api/streetview?size=600x300&location=${vehicle.lat},${vehicle.lon}&heading=${vehicle.bearing}&pitch=-5&fov=100&source=outdoor&key=${import.meta.env.VITE_GOOGLE_STREETVIEW_KEY}`}
+            alt="Street view at bus location"
+            loading="lazy"
+          />
+        </div>
+      )}
     </div>
   );
 };

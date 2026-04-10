@@ -75,7 +75,7 @@ export default function BottomSheet({ open, onClose, children }: BottomSheetProp
       >
         <div
           ref={sheetRef}
-          className="bg-background rounded-t-2xl shadow-2xl border border-b-0 max-h-[45dvh] flex flex-col"
+          className="bg-background rounded-t-2xl shadow-2xl border border-b-0 max-h-[66dvh] flex flex-col"
           onTouchStart={onTouchStart}
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}

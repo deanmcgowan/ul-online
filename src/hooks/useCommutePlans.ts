@@ -78,7 +78,7 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function getNearbyStops(lat: number, lon: number, stops: TransitStop[], maxWalkDistanceMeters: number): NearbyTransitStop[] {
+function getNearbyStops(lat: number, lon: number, stops: TransitStop[], maxWalkDistanceMeters: number, preferredStopId?: string): NearbyTransitStop[] {
   const rankedStops = stops
     .map((stop) => ({
       stop,
@@ -90,13 +90,33 @@ function getNearbyStops(lat: number, lon: number, stops: TransitStop[], maxWalkD
     .filter((entry) => entry.distanceMeters <= Math.min(PREFERRED_STOP_DISTANCE_METERS, maxWalkDistanceMeters))
     .slice(0, MAX_STOPS_PER_PLACE);
 
+  let result: NearbyTransitStop[];
   if (preferredStops.length >= 2) {
-    return preferredStops;
+    result = preferredStops;
+  } else {
+    result = rankedStops
+      .filter((entry) => entry.distanceMeters <= maxWalkDistanceMeters)
+      .slice(0, MAX_STOPS_PER_PLACE);
   }
 
-  return rankedStops
-    .filter((entry) => entry.distanceMeters <= maxWalkDistanceMeters)
-    .slice(0, MAX_STOPS_PER_PLACE);
+  // If a preferred stop is specified, ensure it's included and at the front
+  if (preferredStopId) {
+    const alreadyIncluded = result.some((entry) => entry.stop.stop_id === preferredStopId);
+    if (!alreadyIncluded) {
+      const preferred = rankedStops.find((entry) => entry.stop.stop_id === preferredStopId);
+      if (preferred) {
+        result = [preferred, ...result].slice(0, MAX_STOPS_PER_PLACE);
+      }
+    } else {
+      // Move to front
+      result = [
+        ...result.filter((entry) => entry.stop.stop_id === preferredStopId),
+        ...result.filter((entry) => entry.stop.stop_id !== preferredStopId),
+      ];
+    }
+  }
+
+  return result;
 }
 
 function getApproximateVehicleEta(vehicle: Vehicle, targetStop: TransitStop, stopCount: number, isTowardOrigin: boolean) {
@@ -326,8 +346,8 @@ export function useCommutePlans({
 
     async function buildPlan(pair: (typeof journeyPairs)[number]): Promise<CommutePlan> {
       const originReference = getOriginReferencePoint(pair.origin, userLocation);
-      const originStops = getNearbyStops(originReference.lat, originReference.lon, stops, maxWalkDistanceMeters);
-      const destinationStops = getNearbyStops(pair.destination.lat, pair.destination.lon, stops, maxWalkDistanceMeters);
+      const originStops = getNearbyStops(originReference.lat, originReference.lon, stops, maxWalkDistanceMeters, pair.origin.preferredStopId);
+      const destinationStops = getNearbyStops(pair.destination.lat, pair.destination.lon, stops, maxWalkDistanceMeters, pair.destination.preferredStopId);
 
       if (originStops.length === 0 || destinationStops.length === 0) {
         return {

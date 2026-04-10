@@ -438,6 +438,9 @@ const Index = () => {
         stopRoutes={stopRoutes}
         highlightedStop={highlightedCommuteStop}
         tripDelayMap={delayByTrip}
+        savedPlaces={savedPlaces}
+        lastRefresh={lastRefresh}
+        refreshIntervalMs={ACTIVE_VEHICLE_REFRESH_MS}
       />
 
       {staticLoading && stops.length === 0 && checklist.length > 0 && (

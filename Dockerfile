@@ -8,6 +8,10 @@ RUN npm ci --no-fund --no-audit
 
 COPY . .
 
+# Accept build-time env vars for Vite frontend
+ARG VITE_GOOGLE_STREETVIEW_KEY
+ENV VITE_GOOGLE_STREETVIEW_KEY=${VITE_GOOGLE_STREETVIEW_KEY}
+
 # Build the Vite frontend
 RUN npm run build
 

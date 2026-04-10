@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Star } from "lucide-react";
+import { Loader2, Star, Signpost } from "lucide-react";
 import { fetchStopTimesMulti } from "@/lib/api";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { bearingTowardStop } from "@/lib/busIcon";
 import { buildPlatformGroups, type TransitPlatformGroup, type TransitStopGroup } from "@/lib/stopGroups";
 import { haversineDistanceMeters, pickBestUpcomingStopMatch, type StopTimeMatch } from "@/lib/transitMatching";
 import { buildTripScheduleMap, estimateRemainingTripSeconds, getTripTerminalStopId, inferEffectiveStopSequence, parseGtfsTimeToSeconds, type ScheduledStopTimeRow } from "@/lib/tripSchedules";
+import RefreshTimer from "@/components/RefreshTimer";
 
 export { pickBestUpcomingStopMatch } from "@/lib/transitMatching";
 
@@ -24,6 +25,8 @@ interface StopPopupProps {
   onFilter: (stopGroup: TransitStopGroup) => void;
   onToggleFavorite?: (stop: TransitStop) => void;
   isFavorite?: (stopId: string) => boolean;
+  lastRefresh?: number;
+  refreshIntervalMs?: number;
 }
 
 interface ArrivalCandidate {
@@ -588,6 +591,8 @@ export default function StopPopup({
   onFilter,
   onToggleFavorite,
   isFavorite,
+  lastRefresh,
+  refreshIntervalMs,
 }: StopPopupProps) {
   const { strings } = useAppPreferences();
   const [loading, setLoading] = useState(false);
@@ -686,22 +691,32 @@ export default function StopPopup({
 
   return (
     <div>
-      <h3 className="font-semibold text-sm">{stopGroup.stop_name}</h3>
-      {distanceInfo && (
-        <p className="text-xs text-muted-foreground mt-0.5">
-          {distanceInfo.dist < 1000
-            ? `${Math.round(distanceInfo.dist)} m`
-            : `${(distanceInfo.dist / 1000).toFixed(1)} km`}
-          {distanceInfo.dist <= maxWalkDistanceMeters * 3 && (
-            <>
-              {" · "}
-              🚶 {Math.max(1, Math.round(distanceInfo.walkMin))} min
-              {" · "}
-              🏃 {Math.max(1, Math.round(distanceInfo.runMin))} min
-            </>
+      <div className="flex items-start gap-2.5">
+        <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/40">
+          <Signpost className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-semibold text-sm">{stopGroup.stop_name}</h3>
+          {distanceInfo && (
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {distanceInfo.dist < 1000
+                ? `${Math.round(distanceInfo.dist)} m`
+                : `${(distanceInfo.dist / 1000).toFixed(1)} km`}
+              {distanceInfo.dist <= maxWalkDistanceMeters * 3 && (
+                <>
+                  {" · "}
+                  🚶 {Math.max(1, Math.round(distanceInfo.walkMin))} min
+                  {" · "}
+                  🏃 {Math.max(1, Math.round(distanceInfo.runMin))} min
+                </>
+              )}
+            </p>
           )}
-        </p>
-      )}
+        </div>
+        {lastRefresh != null && refreshIntervalMs != null && (
+          <RefreshTimer intervalMs={refreshIntervalMs} lastRefresh={lastRefresh} compact />
+        )}
+      </div>
       <div className="mt-2 space-y-2">
         {platformGroups.map((platform) => (
           <StopDirectionCard

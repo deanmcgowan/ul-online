@@ -121,44 +121,16 @@ export interface ServiceAlert {
   activePeriods: { start: number; end: number }[];
 }
 
-// In-memory cache: refresh at most every 60 seconds
-let cache: { data: ServiceAlert[]; timestamp: number; fetchedAt: number } | null = null;
+// In-memory cache: store raw decoded feed, re-translate per language on each request
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let cache: { feedObj: Record<string, any>; fetchedAt: number } | null = null;
 const CACHE_TTL_MS = 60_000;
 
-export const serviceAlertsRoute = new Hono();
-
-serviceAlertsRoute.post("/", async (c) => {
-  const now = Date.now();
-  const body = await c.req.json().catch(() => ({}));
-  const lang = (body as Record<string, unknown>)?.language === "sv" ? "sv" : "en";
-
-  if (cache && now - cache.fetchedAt < CACHE_TTL_MS) {
-    // Re-pick translations for requested language
-    return c.json({ alerts: cache.data, timestamp: cache.timestamp });
-  }
-
-  const apiKey = process.env.TRAFIKLAB_SWEDEN3_RT_KEY;
-  if (!apiKey) {
-    return c.json({ error: "API key not configured" }, 500);
-  }
-
-  const url = `https://opendata.samtrafiken.se/gtfs-rt-sweden/ul/ServiceAlertsSweden.pb?key=${apiKey}`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    return c.json({ error: `Trafiklab error: ${response.status}` }, response.status as 400);
-  }
-
-  const buffer = await response.arrayBuffer();
-  const root = getRoot();
-  const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
-  const feed = FeedMessage.decode(new Uint8Array(buffer));
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const feedObj = FeedMessage.toObject(feed, { longs: Number, defaults: true }) as Record<string, any>;
-
-  const nowSec = Math.floor(now / 1000);
-
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildAlerts(feedObj: Record<string, any>, lang: string): ServiceAlert[] {
+  const nowSec = Math.floor(Date.now() / 1000);
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  const alerts: ServiceAlert[] = ((feedObj.entity || []) as any[])
+  return ((feedObj.entity || []) as any[])
     .filter((e: any) => e.alert)
     .map((e: any) => {
       const a = e.alert;
@@ -189,7 +161,6 @@ serviceAlertsRoute.post("/", async (c) => {
         activePeriods,
       };
     })
-    // Filter to currently active alerts
     .filter((alert) => {
       if (alert.activePeriods.length === 0) return true;
       return alert.activePeriods.some(
@@ -197,12 +168,39 @@ serviceAlertsRoute.post("/", async (c) => {
       );
     });
   /* eslint-enable @typescript-eslint/no-explicit-any */
+}
 
-  cache = {
-    data: alerts,
-    timestamp: feedObj.header?.timestamp || 0,
-    fetchedAt: now,
-  };
+export const serviceAlertsRoute = new Hono();
 
-  return c.json({ alerts, timestamp: cache.timestamp });
+serviceAlertsRoute.post("/", async (c) => {
+  const now = Date.now();
+  const body = await c.req.json().catch(() => ({}));
+  const lang = (body as Record<string, unknown>)?.language === "sv" ? "sv" : "en";
+
+  if (cache && now - cache.fetchedAt < CACHE_TTL_MS) {
+    const alerts = buildAlerts(cache.feedObj, lang);
+    return c.json({ alerts, timestamp: cache.feedObj.header?.timestamp || 0 });
+  }
+
+  const apiKey = process.env.TRAFIKLAB_SWEDEN3_RT_KEY;
+  if (!apiKey) {
+    return c.json({ error: "API key not configured" }, 500);
+  }
+
+  const url = `https://opendata.samtrafiken.se/gtfs-rt-sweden/ul/ServiceAlertsSweden.pb?key=${apiKey}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    return c.json({ error: `Trafiklab error: ${response.status}` }, response.status as 400);
+  }
+
+  const buffer = await response.arrayBuffer();
+  const root = getRoot();
+  const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
+  const feed = FeedMessage.decode(new Uint8Array(buffer));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const feedObj = FeedMessage.toObject(feed, { longs: Number, defaults: true }) as Record<string, any>;
+
+  cache = { feedObj, fetchedAt: now };
+  const alerts = buildAlerts(feedObj, lang);
+  return c.json({ alerts, timestamp: feedObj.header?.timestamp || 0 });
 });

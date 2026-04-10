@@ -96,7 +96,17 @@ function pruneTripRouteCache() {
 
 export const vehiclesRoute = new Hono();
 
+// In-memory cache: serve cached data if less than 5 seconds old
+let cache: { data: { vehicles: any[]; timestamp: number }; fetchedAt: number } | null = null;
+const CACHE_TTL_MS = 5_000;
+
 vehiclesRoute.post("/", async (c) => {
+  const now = Date.now();
+
+  if (cache && now - cache.fetchedAt < CACHE_TTL_MS) {
+    return c.json(cache.data);
+  }
+
   pruneTripRouteCache();
 
   const apiKey = process.env.TRAFIKLAB_SWEDEN3_RT_KEY;
@@ -176,5 +186,7 @@ vehiclesRoute.post("/", async (c) => {
     }
   }
 
-  return c.json({ vehicles, timestamp: feedObj.header?.timestamp });
+  const result = { vehicles, timestamp: feedObj.header?.timestamp };
+  cache = { data: result, fetchedAt: Date.now() };
+  return c.json(result);
 });

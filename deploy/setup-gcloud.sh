@@ -34,7 +34,7 @@ gcloud artifacts repositories describe "${REPO}" \
        --description="UL Online container images"
 
 # Create secrets (you'll populate these manually)
-for SECRET in TRAFIKLAB_SWEDEN3_RT_KEY TRAFIKLAB_SWEDEN3_STATIC_KEY TRAFIKVERKET_OPEN_DATA_API_KEY; do
+for SECRET in TRAFIKLAB_SWEDEN3_RT_KEY TRAFIKLAB_SWEDEN3_STATIC_KEY TRAFIKVERKET_OPEN_DATA_API_KEY VITE_GOOGLE_STREETVIEW_KEY; do
   gcloud secrets describe "${SECRET}" --format="value(name)" 2>/dev/null \
     || gcloud secrets create "${SECRET}" --replication-policy="automatic"
   echo "   Secret ${SECRET} exists. Set its value with:"

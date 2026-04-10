@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Briefcase, Home, Loader2, MapPin, Pencil, Plus, Trash2 } from "lucide-react";
+import { Briefcase, Home, Loader2, MapPin, MapPinned, Pencil, Plus, Trash2, Bus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import MapLocationPicker from "@/components/MapLocationPicker";
 import {
   Dialog,
   DialogContent,
@@ -13,8 +14,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { useSavedPlaces } from "@/hooks/useSavedPlaces";
+import { useStaticData } from "@/hooks/useStaticData";
 import { reverseGeocode, searchPlaces, type PlaceSearchResult } from "@/lib/placeSearch";
 import { getDefaultPlaceLabel, type SavedPlace, type SavedPlaceDraft, type SavedPlaceKind } from "@/lib/savedPlaces";
+import { haversineDistanceMeters } from "@/lib/transitMatching";
+import type { TransitStop } from "@/components/BusMap";
 
 function getPlaceIcon(kind: SavedPlaceKind) {
   switch (kind) {
@@ -56,9 +60,27 @@ function getCurrentLocation(): Promise<[number, number]> {
   });
 }
 
+const NEARBY_STOP_RADIUS_METERS = 1000;
+
+interface NearbyStop {
+  stop: TransitStop;
+  distanceMeters: number;
+}
+
+function findNearbyStops(lat: number, lon: number, stops: TransitStop[]): NearbyStop[] {
+  return stops
+    .map((stop) => ({
+      stop,
+      distanceMeters: Math.round(haversineDistanceMeters(lat, lon, stop.stop_lat, stop.stop_lon)),
+    }))
+    .filter((entry) => entry.distanceMeters <= NEARBY_STOP_RADIUS_METERS)
+    .sort((left, right) => left.distanceMeters - right.distanceMeters);
+}
+
 export default function SavedPlacesManager() {
   const { strings } = useAppPreferences();
   const { savedPlaces, upsertPlace, removePlace, getPlaceByKind } = useSavedPlaces();
+  const { stops } = useStaticData();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [draft, setDraft] = useState<SavedPlaceDraft | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -66,7 +88,10 @@ export default function SavedPlacesManager() {
   const [selectedResult, setSelectedResult] = useState<PlaceSearchResult | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [showMapPicker, setShowMapPicker] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [nearbyStops, setNearbyStops] = useState<NearbyStop[]>([]);
+  const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
 
   const primaryKinds = useMemo(() => ["home", "work"] as const, []);
 
@@ -117,6 +142,8 @@ export default function SavedPlacesManager() {
       displayName: existing?.displayName || "",
       lat: existing?.lat || 0,
       lon: existing?.lon || 0,
+      preferredStopId: existing?.preferredStopId,
+      preferredStopName: existing?.preferredStopName,
     });
     setSearchQuery(existing?.displayName || "");
     setSearchResults([]);
@@ -131,7 +158,17 @@ export default function SavedPlacesManager() {
           }
         : null,
     );
+    // Compute nearby stops for existing place
+    if (existing && existing.lat !== 0 && stops.length > 0) {
+      const nearby = findNearbyStops(existing.lat, existing.lon, stops);
+      setNearbyStops(nearby);
+      setSelectedStopId(existing.preferredStopId ?? (nearby[0]?.stop.stop_id ?? null));
+    } else {
+      setNearbyStops([]);
+      setSelectedStopId(null);
+    }
     setSearchError(null);
+    setShowMapPicker(false);
     setIsDialogOpen(true);
   };
 
@@ -150,6 +187,15 @@ export default function SavedPlacesManager() {
         label: current.label.trim() ? current.label : result.label,
       };
     });
+    // Recompute nearby stops for the new location
+    if (result.lat !== 0 && result.lon !== 0 && stops.length > 0) {
+      const nearby = findNearbyStops(result.lat, result.lon, stops);
+      setNearbyStops(nearby);
+      setSelectedStopId(nearby[0]?.stop.stop_id ?? null);
+    } else {
+      setNearbyStops([]);
+      setSelectedStopId(null);
+    }
   };
 
   const handleUseCurrentLocation = async () => {
@@ -183,6 +229,7 @@ export default function SavedPlacesManager() {
       return;
     }
 
+    const chosenStop = nearbyStops.find((ns) => ns.stop.stop_id === selectedStopId);
     upsertPlace({
       id: draft.id,
       kind: draft.kind,
@@ -190,6 +237,8 @@ export default function SavedPlacesManager() {
       displayName: selectedResult.displayName,
       lat: selectedResult.lat,
       lon: selectedResult.lon,
+      preferredStopId: chosenStop?.stop.stop_id,
+      preferredStopName: chosenStop?.stop.stop_name,
     });
     setIsDialogOpen(false);
   };
@@ -218,6 +267,12 @@ export default function SavedPlacesManager() {
                     <>
                       <p className="mt-2 truncate text-sm font-semibold">{place.label}</p>
                       <p className="mt-1 text-xs text-muted-foreground">{place.displayName}</p>
+                      {place.preferredStopName && (
+                        <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                          <Bus className="h-3 w-3 shrink-0" />
+                          {place.preferredStopName}
+                        </p>
+                      )}
                     </>
                   ) : (
                     <p className="mt-2 text-xs text-muted-foreground">{strings.savedPlaceMissing}</p>
@@ -253,6 +308,12 @@ export default function SavedPlacesManager() {
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{place.label}</p>
                     <p className="text-xs text-muted-foreground">{place.displayName}</p>
+                    {place.preferredStopName && (
+                      <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                        <Bus className="h-3 w-3 shrink-0" />
+                        {place.preferredStopName}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-1">
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEditor("other", place)}>
@@ -299,13 +360,43 @@ export default function SavedPlacesManager() {
                 />
               </div>
 
-              <div className="flex items-center gap-2">
-                <Button type="button" variant="outline" onClick={handleUseCurrentLocation} disabled={isLocating}>
-                  {isLocating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MapPin className="mr-2 h-4 w-4" />}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={handleUseCurrentLocation} disabled={isLocating}>
+                  {isLocating ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <MapPin className="mr-1.5 h-4 w-4" />}
                   {strings.useCurrentLocation}
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => setShowMapPicker(true)}>
+                  <MapPinned className="mr-1.5 h-4 w-4" />
+                  {strings.pickOnMap}
                 </Button>
                 {selectedResult && <Badge variant="secondary">{strings.placeSelected}</Badge>}
               </div>
+
+              {showMapPicker && (
+                <MapLocationPicker
+                  initialCenter={
+                    selectedResult && selectedResult.lat !== 0
+                      ? [selectedResult.lon, selectedResult.lat]
+                      : undefined
+                  }
+                  confirmLabel={strings.confirmLocation}
+                  cancelLabel={strings.cancel}
+                  onCancel={() => setShowMapPicker(false)}
+                  onConfirm={(lat, lon, displayName) => {
+                    const result = {
+                      id: crypto.randomUUID(),
+                      label: displayName.split(",")[0] || displayName,
+                      displayName,
+                      lat,
+                      lon,
+                    };
+                    handleSelectResult(result);
+                    setSearchQuery(displayName);
+                    setSearchResults([]);
+                    setShowMapPicker(false);
+                  }}
+                />
+              )}
 
               {searchError && <p className="text-sm text-destructive">{searchError}</p>}
 
@@ -337,6 +428,44 @@ export default function SavedPlacesManager() {
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">{strings.selectedPlace}</p>
                   <p className="mt-1 text-sm font-medium">{selectedResult.label}</p>
                   <p className="text-xs text-muted-foreground">{selectedResult.displayName}</p>
+                </div>
+              )}
+
+              {selectedResult && (
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-sm font-medium">{strings.preferredBusStop}</label>
+                    <p className="text-xs text-muted-foreground">{strings.preferredBusStopHint}</p>
+                  </div>
+                  {nearbyStops.length > 0 ? (
+                    <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border p-2">
+                      {nearbyStops.map((ns) => {
+                        const isSelected = ns.stop.stop_id === selectedStopId;
+                        return (
+                          <button
+                            key={ns.stop.stop_id}
+                            type="button"
+                            className={`w-full rounded-md px-3 py-2 text-left transition-colors flex items-center gap-2 ${
+                              isSelected
+                                ? "border-2 border-primary bg-primary/5"
+                                : "border bg-background hover:bg-accent"
+                            }`}
+                            onClick={() => setSelectedStopId(ns.stop.stop_id)}
+                          >
+                            <Bus className={`h-3.5 w-3.5 shrink-0 ${isSelected ? "text-primary" : "text-muted-foreground"}`} />
+                            <div className="min-w-0 flex-1">
+                              <p className={`text-sm ${isSelected ? "font-semibold" : "font-medium"}`}>{ns.stop.stop_name}</p>
+                            </div>
+                            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                              {strings.distanceAway(ns.distanceMeters)}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">{strings.noNearbyStops}</p>
+                  )}
                 </div>
               )}
             </div>

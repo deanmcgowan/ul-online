@@ -98,6 +98,13 @@ export interface AppStrings {
   placeSearchError: string;
   currentLocationLabel: string;
   currentLocationError: string;
+  pickOnMap: string;
+  confirmLocation: string;
+  cancel: string;
+  preferredBusStop: string;
+  preferredBusStopHint: string;
+  noNearbyStops: string;
+  distanceAway: (meters: number) => string;
   commuteDashboardTitle: string;
   commuteDashboardEmptyTitle: string;
   commuteDashboardEmptyDescription: string;
@@ -136,6 +143,7 @@ export interface AppStrings {
   delayedBy: (duration: string) => string;
   aheadOfSchedule: (duration: string) => string;
   onTime: string;
+  stopped: string;
   minutesLate: (n: number) => string;
   minutesEarly: (n: number) => string;
   serviceAlerts: string;
@@ -239,6 +247,13 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     placeSearchError: "Place search failed. Try another search.",
     currentLocationLabel: "Current location",
     currentLocationError: "Current location could not be used.",
+    pickOnMap: "Pick on map",
+    confirmLocation: "Confirm location",
+    cancel: "Cancel",
+    preferredBusStop: "Preferred bus stop",
+    preferredBusStopHint: "The closest stop is selected by default. Choose a different one if needed.",
+    noNearbyStops: "No bus stops found within 1 km.",
+    distanceAway: (meters) => meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${meters} m`,
     commuteDashboardTitle: "Commute now",
     commuteDashboardEmptyTitle: "Set up saved places",
     commuteDashboardEmptyDescription: "Add at least two saved places to see live place-to-place commute suggestions.",
@@ -277,6 +292,7 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     delayedBy: (duration) => `Delayed ${duration}`,
     aheadOfSchedule: (duration) => `${duration} ahead`,
     onTime: "On time",
+    stopped: "Stopped",
     minutesLate: (n) => `${n} min late`,
     minutesEarly: (n) => `${n} min early`,
     serviceAlerts: "Service alerts",
@@ -378,6 +394,13 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     placeSearchError: "Platssökningen misslyckades. Försök igen.",
     currentLocationLabel: "Nuvarande plats",
     currentLocationError: "Nuvarande plats kunde inte användas.",
+    pickOnMap: "Välj på kartan",
+    confirmLocation: "Bekräfta plats",
+    cancel: "Avbryt",
+    preferredBusStop: "Föredragen hållplats",
+    preferredBusStopHint: "Närmaste hållplatsen väljs automatiskt. Välj en annan om det behövs.",
+    noNearbyStops: "Inga hållplatser hittades inom 1 km.",
+    distanceAway: (meters) => meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${meters} m`,
     commuteDashboardTitle: "Pendla nu",
     commuteDashboardEmptyTitle: "Ställ in sparade platser",
     commuteDashboardEmptyDescription: "Lägg till minst två sparade platser för att se liveförslag mellan platser.",
@@ -416,6 +439,7 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     delayedBy: (duration) => `Försenad ${duration}`,
     aheadOfSchedule: (duration) => `${duration} före tidtabell`,
     onTime: "I tid",
+    stopped: "Stillastående",
     minutesLate: (n) => `${n} min sen`,
     minutesEarly: (n) => `${n} min tidig`,
     serviceAlerts: "Trafikstörningar",
