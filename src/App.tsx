@@ -2,6 +2,7 @@ import { Suspense, lazy } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AppPreferencesProvider, useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { Toaster } from "@/components/ui/toaster";
+import InstallBanner from "@/components/InstallBanner";
 import Index from "./pages/Index.tsx";
 const Settings = lazy(() => import("./pages/Settings.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
@@ -44,6 +45,7 @@ const App = () => (
   <AppPreferencesProvider>
     <AppRoutes />
     <Toaster />
+    <InstallBanner />
   </AppPreferencesProvider>
 );
 

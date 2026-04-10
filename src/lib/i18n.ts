@@ -157,7 +157,17 @@ export interface AppStrings {
   minutesEarly: (n: number) => string;
   serviceAlerts: string;
   serviceAlertCount: (count: number) => string;
-}
+  installBannerTitle: string;
+  installBannerDescription: string;
+  installBannerSteps: string;
+  installBannerDismiss: string;
+  notifyWhenTimeToLeave: string;
+  notifyScheduled: (time: string) => string;
+  notifyCancel: string;
+  notifyCancelled: string;
+  notificationsBlocked: string;
+  notificationsUnsupported: string;
+  notifyInstallRequired: string;
 
 const STRINGS: Record<SupportedLanguage, AppStrings> = {
   "en-GB": {
@@ -315,6 +325,17 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     minutesEarly: (n) => `${n} min early`,
     serviceAlerts: "Service alerts",
     serviceAlertCount: (count) => `${count} active alert${count !== 1 ? "s" : ""}`,
+    installBannerTitle: "Install for the best experience",
+    installBannerDescription: "Add this app to your home screen for faster access and departure notifications.",
+    installBannerSteps: "Tap the Share button, then choose "Add to Home Screen".",
+    installBannerDismiss: "Not now",
+    notifyWhenTimeToLeave: "Notify me when it's time to leave",
+    notifyScheduled: (time) => `You'll be notified at ${time}`,
+    notifyCancel: "Cancel notification",
+    notifyCancelled: "Notification cancelled",
+    notificationsBlocked: "Notifications are blocked. Enable them in your device settings.",
+    notificationsUnsupported: "Notifications are not supported on this device or browser.",
+    notifyInstallRequired: "Install the app to your home screen to enable notifications.",
   },
   "sv-SE": {
     appTitle: "UL Busskarta",
@@ -471,6 +492,17 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     minutesEarly: (n) => `${n} min tidig`,
     serviceAlerts: "Trafikstörningar",
     serviceAlertCount: (count) => `${count} aktiv${count !== 1 ? "a" : ""} störning${count !== 1 ? "ar" : ""}`,
+    installBannerTitle: "Installera för bästa upplevelsen",
+    installBannerDescription: "Lägg till appen på hemskärmen för snabbare åtkomst och avgångsnotiser.",
+    installBannerSteps: "Tryck på Dela-knappen och välj sedan "Lägg till på hemskärmen".",
+    installBannerDismiss: "Inte nu",
+    notifyWhenTimeToLeave: "Meddela mig när det är dags att gå",
+    notifyScheduled: (time) => `Du meddelas kl. ${time}`,
+    notifyCancel: "Avbryt notis",
+    notifyCancelled: "Notis avbruten",
+    notificationsBlocked: "Notiser är blockerade. Aktivera dem i enhetsinställningarna.",
+    notificationsUnsupported: "Notiser stöds inte på den här enheten eller webbläsaren.",
+    notifyInstallRequired: "Installera appen på hemskärmen för att aktivera notiser.",
   },
 };
 

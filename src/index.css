@@ -2,12 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Prevent text selection throughout the app (mobile UI) */
+/* Prevent text selection and mobile callout/highlight throughout the app */
 *,
 *::before,
 *::after {
   -webkit-user-select: none;
   user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Re-enable selection for actual text input fields */
@@ -16,6 +18,21 @@ textarea,
 [contenteditable="true"] {
   -webkit-user-select: text;
   user-select: text;
+}
+
+/* Safe area utility classes for iPhone notch / Dynamic Island / home indicator */
+@layer utilities {
+  .top-safe-4    { top:    calc(1rem   + env(safe-area-inset-top,    0px)); }
+  .top-safe-24   { top:    calc(6rem   + env(safe-area-inset-top,    0px)); }
+  .bottom-safe-6 { bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px)); }
+  .bottom-safe-20{ bottom: calc(5rem   + env(safe-area-inset-bottom, 0px)); }
+  .left-safe-4   { left:   calc(1rem   + env(safe-area-inset-left,   0px)); }
+  .right-safe-4  { right:  calc(1rem   + env(safe-area-inset-right,  0px)); }
+  /* For the Sheet panel — !important to beat Radix defaults */
+  .sheet-safe-top    { top:    calc(1rem + env(safe-area-inset-top,    0px)) !important; }
+  .sheet-safe-bottom { bottom: calc(1rem + env(safe-area-inset-bottom, 0px)) !important; }
+  .sheet-safe-right  { right:  calc(1rem + env(safe-area-inset-right,  0px)) !important; }
+  .sheet-safe-height { height: calc(100dvh - 2rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) !important; }
 }
 
 /* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 

@@ -462,7 +462,7 @@ const Index = () => {
       )}
 
       {filteredStop && (
-        <div className="absolute top-4 left-4 right-4 bg-background/95 backdrop-blur-sm rounded-lg px-4 py-3 shadow-lg flex items-center justify-between z-10 border">
+        <div className="absolute top-safe-4 left-safe-4 right-safe-4 bg-background/95 backdrop-blur-sm rounded-lg px-4 py-3 shadow-lg flex items-center justify-between z-10 border">
           <div>
             <p className="text-xs text-muted-foreground">{strings.filteringByStop}</p>
             <p className="text-sm font-semibold">{filteredStop.stop_name}</p>
@@ -481,12 +481,12 @@ const Index = () => {
         onOpenSettings={() => navigate("/settings")}
         onSelectPlan={handleCommutePlanSelect}
         activePlanId={activeCommutePlanId}
-        offsetTopClassName={filteredStop ? "top-24" : "top-4"}
+        offsetTopClassName={filteredStop ? "top-safe-24" : "top-safe-4"}
       />
 
       {/* Favorites panel */}
       {showFavorites && favorites.length > 0 && (
-        <div className={`absolute left-4 z-10 w-[min(19rem,calc(100vw-6rem))] rounded-lg border bg-background/95 shadow-lg backdrop-blur-sm max-h-[50vh] overflow-y-auto ${filteredStop ? "top-24" : "top-4"}`}>
+        className={`absolute left-safe-4 z-10 w-[min(19rem,calc(100vw-6rem))] rounded-lg border bg-background/95 shadow-lg backdrop-blur-sm max-h-[50vh] overflow-y-auto ${filteredStop ? "top-safe-24" : "top-safe-4"}`}
           <div className="flex items-center justify-between px-4 py-2 border-b">
             <p className="text-sm font-semibold">{strings.favouriteStops}</p>
             <Button variant="ghost" size="icon" onClick={() => setShowFavorites(false)}>
@@ -508,13 +508,13 @@ const Index = () => {
         </div>
       )}
 
-      <div className="absolute bottom-6 left-4 z-10 flex flex-col gap-2 items-start">
+      <div className="absolute bottom-safe-6 left-safe-4 z-10 flex flex-col gap-2 items-start">
         <RefreshTimer intervalMs={ACTIVE_VEHICLE_REFRESH_MS} lastRefresh={lastRefresh} isActive={isAppActive} />
       </div>
 
       {/* Service alerts */}
       {serviceAlerts.length > 0 && (
-        <div className="absolute bottom-20 left-4 right-16 z-10 max-w-sm">
+        <div className="absolute bottom-safe-20 left-safe-4 right-safe-4 z-10 max-w-sm">
           <button
             className="flex items-center gap-2 bg-destructive/90 text-destructive-foreground backdrop-blur-sm rounded-lg px-3 py-2 shadow-lg text-xs font-medium w-full text-left"
             onClick={() => setShowAlerts(!showAlerts)}
@@ -543,7 +543,7 @@ const Index = () => {
         </div>
       )}
 
-      <div className="absolute bottom-6 right-4 flex flex-col gap-2 z-10">
+      <div className="absolute bottom-safe-6 right-safe-4 flex flex-col gap-2 z-10">
         {favorites.length > 0 && (
           <Button
             variant="secondary"

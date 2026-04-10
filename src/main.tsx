@@ -31,6 +31,18 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
 			updateViaCache: "none",
 		});
 
+		// When a new SW activates and claims this client, reload to get fresh assets.
+		// We only reload if a controller was already present (i.e. this is an *update*,
+		// not the very first install where the SW just claims the page for the first time).
+		const existingController = navigator.serviceWorker.controller;
+		let reloadScheduled = false;
+		navigator.serviceWorker.addEventListener("controllerchange", () => {
+			if (existingController && !reloadScheduled) {
+				reloadScheduled = true;
+				window.location.reload();
+			}
+		});
+
 		if ("requestIdleCallback" in window) {
 			window.requestIdleCallback(register);
 		} else {

@@ -47,6 +47,23 @@ export function getDb(): Database.Database {
         value      TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT ''
       );
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id         TEXT PRIMARY KEY,
+        endpoint   TEXT NOT NULL UNIQUE,
+        p256dh     TEXT NOT NULL,
+        auth       TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS scheduled_notifications (
+        id              TEXT PRIMARY KEY,
+        subscription_id TEXT NOT NULL,
+        notify_at       TEXT NOT NULL,
+        title           TEXT NOT NULL,
+        body            TEXT NOT NULL,
+        sent_at         TEXT,
+        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_scheduled_notify_at ON scheduled_notifications(notify_at);
     `);
   }
   return _db;

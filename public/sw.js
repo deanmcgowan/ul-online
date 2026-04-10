@@ -22,7 +22,38 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    Promise.all([cleanupOldCaches(), clients.claim()])
+    Promise.all([cleanupOldCaches(), clients.claim()]).then(() => {
+      // Notify all open tabs that a new version has activated
+      return self.clients.matchAll({ type: "window" }).then((clientList) => {
+        clientList.forEach((client) => client.postMessage({ type: "APP_UPDATED" }));
+      });
+    })
+  );
+});
+
+self.addEventListener("push", (event) => {
+  const data = event.data?.json() ?? { title: "UL Bus Tracker", body: "" };
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag: "commute-notify",
+      renotify: true,
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      const openClient = clientList.find((c) => c.url.startsWith(self.location.origin));
+      if (openClient) {
+        return openClient.focus();
+      }
+      return self.clients.openWindow("/");
+    })
   );
 });
 

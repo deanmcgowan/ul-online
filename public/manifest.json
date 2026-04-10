@@ -11,6 +11,7 @@
   "theme_color": "#1e293b",
   "orientation": "portrait",
   "categories": ["travel", "navigation"],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/icon-192.png",
@@ -22,7 +23,7 @@
       "src": "/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     }
   ]
 }

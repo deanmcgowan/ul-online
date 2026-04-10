@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { AlertTriangle, ArrowRight, BellRing, Briefcase, Bus, ChevronDown, ChevronRight, Footprints, GraduationCap, Home, Loader2, MapPin, Navigation, Route } from "lucide-react";
+import { AlertTriangle, ArrowRight, Bell, BellOff, BellRing, Briefcase, Bus, ChevronDown, ChevronRight, Footprints, GraduationCap, Home, Loader2, MapPin, Navigation, Route } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
+import { usePushNotifications } from "@/hooks/usePushNotifications";
 import type { CommuteOption, CommutePlan } from "@/hooks/useCommutePlans";
 import type { SavedPlace } from "@/lib/savedPlaces";
 
@@ -122,12 +123,18 @@ function TripOptionRow({
   expanded,
   onToggle,
   strings,
+  destinationLabel,
+  onNotify,
+  notifyState,
 }: {
   option: CommuteOption;
   label: string;
   expanded: boolean;
   onToggle: () => void;
   strings: ReturnType<typeof useAppPreferences>["strings"];
+  destinationLabel: string;
+  onNotify: () => void;
+  notifyState: "idle" | "scheduled" | "pending";
 }) {
   const transitLegs = option.legs.filter((l) => l.type === "JNY");
   const lineNames = transitLegs.map((l) => l.line ?? "?").join(" → ");
@@ -162,6 +169,26 @@ function TripOptionRow({
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
       </button>
+
+      {/* Notify button — only shown when there's a departure time to schedule from */}
+      {option.departureTime && (
+        <div className="border-t px-3 pb-2 pt-2">
+          <button
+            type="button"
+            className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors ${notifyState === "scheduled" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+            onClick={(e) => { e.stopPropagation(); onNotify(); }}
+          >
+            {notifyState === "scheduled" ? (
+              <BellOff className="h-3.5 w-3.5 shrink-0" />
+            ) : notifyState === "pending" ? (
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+            ) : (
+              <Bell className="h-3.5 w-3.5 shrink-0" />
+            )}
+            <span>{notifyState === "scheduled" ? strings.notifyCancel : strings.notifyWhenTimeToLeave}</span>
+          </button>
+        </div>
+      )}
 
       {expanded && (
         <div className="space-y-1.5 border-t px-3 pb-3 pt-2 text-xs">
@@ -218,6 +245,8 @@ export default function CommuteDashboard({
   const { strings } = useAppPreferences();
   const [open, setOpen] = useState(false);
   const [expandedTripKey, setExpandedTripKey] = useState<string | null>(null);
+  const [notifyPendingKey, setNotifyPendingKey] = useState<string | null>(null);
+  const { state: pushState, activeNotification, scheduleNotification, cancelNotification } = usePushNotifications();
   const likelyPlan = plans.find((plan) => plan.activeOrigin && plan.bestOption) ?? plans.find((plan) => plan.bestOption) ?? null;
   const likelyAlert = getLikelyAlert(likelyPlan, strings);
 
@@ -289,7 +318,7 @@ export default function CommuteDashboard({
           </Button>
         </SheetTrigger>
 
-        <SheetContent side="right" className="!inset-y-4 !right-4 !h-[calc(100dvh-2rem)] !w-[min(26rem,calc(100vw-2.5rem))] !border !rounded-2xl !p-0 flex flex-col shadow-2xl overflow-hidden">
+        <SheetContent side="right" className="sheet-safe-top sheet-safe-bottom sheet-safe-right sheet-safe-height !w-[min(26rem,calc(100vw-2.5rem))] !border !rounded-2xl !p-0 flex flex-col shadow-2xl overflow-hidden">
           <SheetHeader className="shrink-0 border-b px-5 py-4">
             <SheetTitle>{strings.commuteDashboardTitle}</SheetTitle>
             <SheetDescription>
@@ -332,6 +361,38 @@ export default function CommuteDashboard({
                         expanded={expandedTripKey === `${plan.id}:best`}
                         onToggle={() => setExpandedTripKey(expandedTripKey === `${plan.id}:best` ? null : `${plan.id}:best`)}
                         strings={strings}
+                        destinationLabel={plan.destination.label}
+                        notifyState={notifyPendingKey === `${plan.id}:best` ? "pending" : activeNotification?.id && scheduleNotification ? activeNotification.subscriptionId ? "scheduled" : "idle" : "idle"}
+                        onNotify={() => {
+                          const opt = plan.bestOption!;
+                          const tripKey = `${plan.id}:best`;
+                          if (activeNotification) {
+                            cancelNotification();
+                            return;
+                          }
+                          if (!opt.departureTime) return;
+                          if (pushState === "blocked") { alert(strings.notificationsBlocked); return; }
+                          if (pushState === "unsupported") { alert(strings.notificationsUnsupported); return; }
+                          if (pushState === "install-required") { alert(strings.notifyInstallRequired); return; }
+                          setNotifyPendingKey(tripKey);
+                          const transitLegs = opt.legs.filter((l) => l.type === "JNY");
+                          const lineNames = transitLegs.map((l) => l.line ?? "?").join(" → ");
+                          scheduleNotification(
+                            opt.departureTime,
+                            opt.walkSeconds,
+                            strings.notifyWhenTimeToLeave,
+                            `${lineNames} ${strings.departsAt(opt.departureTime)} — ${plan.destination.label}`,
+                          ).then((result) => {
+                            setNotifyPendingKey(null);
+                            if (result === "ok" && opt.departureTime) {
+                              const [hh, mm] = opt.departureTime.split(":").map(Number);
+                              const leaveAt = new Date();
+                              leaveAt.setHours(hh, mm, 0, 0);
+                              leaveAt.setSeconds(leaveAt.getSeconds() - opt.walkSeconds - 120);
+                              alert(strings.notifyScheduled(`${String(leaveAt.getHours()).padStart(2, "0")}:${String(leaveAt.getMinutes()).padStart(2, "0")}`));
+                            }
+                          });
+                        }}
                       />
 
                       {plan.fallbackOption && (
@@ -341,6 +402,9 @@ export default function CommuteDashboard({
                           expanded={expandedTripKey === `${plan.id}:next`}
                           onToggle={() => setExpandedTripKey(expandedTripKey === `${plan.id}:next` ? null : `${plan.id}:next`)}
                           strings={strings}
+                          destinationLabel={plan.destination.label}
+                          notifyState="idle"
+                          onNotify={() => {}}
                         />
                       )}
 
