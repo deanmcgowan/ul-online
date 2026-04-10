@@ -486,7 +486,7 @@ const Index = () => {
 
       {/* Favorites panel */}
       {showFavorites && favorites.length > 0 && (
-        className={`absolute left-safe-4 z-10 w-[min(19rem,calc(100vw-6rem))] rounded-lg border bg-background/95 shadow-lg backdrop-blur-sm max-h-[50vh] overflow-y-auto ${filteredStop ? "top-safe-24" : "top-safe-4"}`}
+        <div className={`absolute left-safe-4 z-10 w-[min(19rem,calc(100vw-6rem))] rounded-lg border bg-background/95 shadow-lg backdrop-blur-sm max-h-[50vh] overflow-y-auto ${filteredStop ? "top-safe-24" : "top-safe-4"}`}>
           <div className="flex items-center justify-between px-4 py-2 border-b">
             <p className="text-sm font-semibold">{strings.favouriteStops}</p>
             <Button variant="ghost" size="icon" onClick={() => setShowFavorites(false)}>
