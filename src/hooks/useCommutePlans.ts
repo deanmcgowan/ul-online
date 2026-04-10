@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchResRobotTrip, type ResRobotTrip, type ResRobotLeg } from "@/lib/api";
 import type { TransitStop } from "@/components/BusMap";
 import type { RoadSituation } from "@/hooks/useRoadSituations";
@@ -352,6 +352,8 @@ export function getTrafficQueryForPlan(plan: CommutePlan | null) {
   };
 }
 
+const REFRESH_MS = 90_000;
+
 export function useCommutePlans({
   savedPlaces,
   userLocation,
@@ -367,8 +369,14 @@ export function useCommutePlans({
   language: SupportedLanguage;
   roadSituations?: RoadSituation[];
 }) {
-  const [plans, setPlans] = useState<CommutePlan[]>([]);
+  // rawPlans: trip data only, no traffic impact (independent of roadSituations)
+  const [rawPlans, setRawPlans] = useState<CommutePlan[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Keep a ref for roadSituations so the fetch effect can read the latest value
+  // without roadSituations being a dependency that triggers cancellations.
+  const roadSituationsRef = useRef(roadSituations);
+  useEffect(() => { roadSituationsRef.current = roadSituations; }, [roadSituations]);
 
   const journeyPairs = useMemo(
     () => buildJourneyPairs(savedPlaces, userLocation),
@@ -377,7 +385,7 @@ export function useCommutePlans({
 
   useEffect(() => {
     if (journeyPairs.length === 0) {
-      setPlans([]);
+      setRawPlans([]);
       setLoading(false);
       return;
     }
@@ -413,10 +421,6 @@ export function useCommutePlans({
       const options = data.trips
         .map((trip) => convertTrip(trip, originCoords, destCoords, walkSpeed, bufferMinutes))
         .filter((opt): opt is CommuteOption => opt !== null)
-        .map((opt) => ({
-          ...opt,
-          trafficImpact: getTrafficImpactForOption(opt, roadSituations, language),
-        }))
         .sort((a, b) => a.score - b.score);
 
       return {
@@ -431,14 +435,15 @@ export function useCommutePlans({
     }
 
     async function loadPlans() {
+      if (cancelled) return;
       setLoading(true);
       try {
         const nextPlans = await Promise.all(journeyPairs.map(buildPlan));
-        if (!cancelled) setPlans(nextPlans);
+        if (!cancelled) setRawPlans(nextPlans);
       } catch (err) {
         console.warn("Commute planning failed", err);
         if (!cancelled) {
-          setPlans(
+          setRawPlans(
             journeyPairs.map((pair) => ({
               id: `${pair.origin.id}:${pair.destination.id}`,
               origin: pair.origin,
@@ -456,8 +461,26 @@ export function useCommutePlans({
     }
 
     loadPlans();
-    return () => { cancelled = true; };
-  }, [bufferMinutes, journeyPairs, language, roadSituations, userLocation, walkSpeed]);
+    const timer = setInterval(loadPlans, REFRESH_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [bufferMinutes, journeyPairs, language, walkSpeed]); // intentionally excludes roadSituations and userLocation
+
+  // Apply traffic impact as a derived computation — no API calls, no cancellation risk.
+  const plans = useMemo<CommutePlan[]>(() => {
+    return rawPlans.map((plan) => ({
+      ...plan,
+      bestOption: plan.bestOption
+        ? { ...plan.bestOption, trafficImpact: getTrafficImpactForOption(plan.bestOption, roadSituationsRef.current, language) }
+        : null,
+      fallbackOption: plan.fallbackOption
+        ? { ...plan.fallbackOption, trafficImpact: getTrafficImpactForOption(plan.fallbackOption, roadSituationsRef.current, language) }
+        : null,
+    }));
+  }, [rawPlans, roadSituations, language]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { plans, loading };
 }
