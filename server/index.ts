@@ -15,6 +15,7 @@ import { serviceAlertsRoute } from "./routes/service-alerts.js";
 import { importRoute, runGtfsImport } from "./routes/import.js";
 import { resrobotRoute } from "./routes/resrobot.js";
 import { pushRoute, startPushScheduler } from "./routes/push.js";
+import { walkDistanceRoute } from "./routes/walk-distance.js";
 import { getDb } from "./db.js";
 
 const app = new Hono();
@@ -31,6 +32,7 @@ app.route("/api/trip-updates", tripUpdatesRoute);
 app.route("/api/service-alerts", serviceAlertsRoute);
 app.route("/api/resrobot", resrobotRoute);
 app.route("/api/push", pushRoute);
+app.route("/api/walk-distance", walkDistanceRoute);
 app.route("/api/import", importRoute);
 
 // Health check

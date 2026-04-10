@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import SavedPlacesManager from "@/components/SavedPlacesManager";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -38,7 +39,6 @@ const Settings = () => {
   };
 
   const walkRadius = ((draft.walkSpeed / 3.6) * draft.bufferMinutes * 60).toFixed(0);
-  const runRadius = ((draft.runSpeed / 3.6) * draft.bufferMinutes * 60).toFixed(0);
   const maxWalkDistanceLabel = draft.maxWalkDistanceMeters >= 1000
     ? `${(draft.maxWalkDistanceMeters / 1000).toFixed(1)} km`
     : `${draft.maxWalkDistanceMeters} m`;
@@ -93,40 +93,49 @@ const Settings = () => {
                 <CardTitle>{strings.journeyCardTitle}</CardTitle>
                 <CardDescription>{strings.journeyCardDescription}</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-8">
-                <div>
-                  <div className="mb-3 flex items-baseline justify-between">
-                    <label className="text-sm font-medium">{strings.bufferTime}</label>
-                    <span className="text-sm text-muted-foreground tabular-nums">
-                      {draft.bufferMinutes} min
-                    </span>
+              <CardContent className="space-y-6">
+                {/* Reach section — buffer & walk speed work together */}
+                <div className="space-y-5">
+                  <div>
+                    <div className="mb-3 flex items-baseline justify-between">
+                      <label className="text-sm font-medium">{strings.bufferTime}</label>
+                      <span className="text-sm text-muted-foreground tabular-nums">
+                        {draft.bufferMinutes} min
+                      </span>
+                    </div>
+                    <Slider
+                      value={[draft.bufferMinutes]}
+                      onValueChange={([value]) => updateDraft("bufferMinutes", value)}
+                      min={1}
+                      max={15}
+                      step={1}
+                    />
                   </div>
-                  <Slider
-                    value={[draft.bufferMinutes]}
-                    onValueChange={([value]) => updateDraft("bufferMinutes", value)}
-                    min={1}
-                    max={15}
-                    step={1}
-                  />
-                  <p className="mt-2 text-xs text-muted-foreground">{strings.bufferTimeHint}</p>
+
+                  <div>
+                    <div className="mb-3 flex items-baseline justify-between">
+                      <label className="text-sm font-medium">{strings.walkSpeed}</label>
+                      <span className="text-sm text-muted-foreground tabular-nums">
+                        {draft.walkSpeed} km/h
+                      </span>
+                    </div>
+                    <Slider
+                      value={[draft.walkSpeed]}
+                      onValueChange={([value]) => updateDraft("walkSpeed", value)}
+                      min={1}
+                      max={10}
+                      step={0.5}
+                    />
+                  </div>
+
+                  <div className="rounded-xl border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
+                    {strings.bufferTimeHint} <span className="font-medium text-foreground">{walkRadius} m</span>.
+                  </div>
                 </div>
 
-                <div>
-                  <div className="mb-3 flex items-baseline justify-between">
-                    <label className="text-sm font-medium">{strings.walkSpeed}</label>
-                    <span className="text-sm text-muted-foreground tabular-nums">
-                      {draft.walkSpeed} km/h → {walkRadius} m in {draft.bufferMinutes} min
-                    </span>
-                  </div>
-                  <Slider
-                    value={[draft.walkSpeed]}
-                    onValueChange={([value]) => updateDraft("walkSpeed", value)}
-                    min={1}
-                    max={10}
-                    step={0.5}
-                  />
-                </div>
+                <Separator />
 
+                {/* Stop filter */}
                 <div>
                   <div className="mb-3 flex items-baseline justify-between">
                     <label className="text-sm font-medium">{strings.maxWalkDistance}</label>
@@ -142,22 +151,6 @@ const Settings = () => {
                     step={100}
                   />
                   <p className="mt-2 text-xs text-muted-foreground">{strings.maxWalkDistanceHint}</p>
-                </div>
-
-                <div>
-                  <div className="mb-3 flex items-baseline justify-between">
-                    <label className="text-sm font-medium">{strings.runSpeed}</label>
-                    <span className="text-sm text-muted-foreground tabular-nums">
-                      {draft.runSpeed} km/h → {runRadius} m in {draft.bufferMinutes} min
-                    </span>
-                  </div>
-                  <Slider
-                    value={[draft.runSpeed]}
-                    onValueChange={([value]) => updateDraft("runSpeed", value)}
-                    min={3}
-                    max={20}
-                    step={0.5}
-                  />
                 </div>
               </CardContent>
             </Card>
@@ -212,8 +205,9 @@ const Settings = () => {
                 <CardTitle>{strings.appCardTitle}</CardTitle>
                 <CardDescription>{strings.appCardDescription}</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-8">
-                <div className="space-y-2">
+              <CardContent className="space-y-0">
+                {/* Language */}
+                <div className="space-y-2 pb-6">
                   <label className="text-sm font-medium">{strings.language}</label>
                   <Select
                     value={draft.language}
@@ -233,9 +227,17 @@ const Settings = () => {
                   <p className="text-xs text-muted-foreground">{strings.languageHint}</p>
                 </div>
 
-                <SavedPlacesManager />
+                <Separator />
 
-                <div>
+                {/* Saved places */}
+                <div className="py-6">
+                  <SavedPlacesManager />
+                </div>
+
+                <Separator />
+
+                {/* Favourite stops */}
+                <div className="pt-6">
                   <label className="mb-3 block text-sm font-medium">{strings.favouriteStops}</label>
                   {favorites.length > 0 ? (
                     <div className="overflow-hidden rounded-xl border bg-muted/20">

@@ -94,9 +94,9 @@ export default function MapLocationPicker({
     <div className="flex flex-col gap-3">
       <div className="relative w-full rounded-lg overflow-hidden border" style={{ height: "min(50dvh, 320px)" }}>
         <div ref={containerRef} className="w-full h-full" />
-        {/* Fixed crosshair in centre */}
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <Crosshair className="h-8 w-8 text-primary drop-shadow-md" strokeWidth={2.5} />
+        {/* Fixed crosshair in centre — z-[200] ensures it sits above all OL map layers */}
+        <div className="pointer-events-none absolute inset-0 z-[200] flex items-center justify-center">
+          <Crosshair className="h-6 w-6 text-primary drop-shadow-md" strokeWidth={1.5} />
         </div>
       </div>
       <div className="flex gap-2 justify-end">

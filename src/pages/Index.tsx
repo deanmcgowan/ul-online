@@ -112,7 +112,6 @@ const Index = () => {
 
   const {
     walkSpeed,
-    runSpeed,
     bufferMinutes,
     maxWalkDistanceMeters,
     highAccuracyLocation,
@@ -351,9 +350,9 @@ const Index = () => {
 
     if (mapInstance) {
       const [lon, lat] = userLocation;
-      const runRadiusMeters = (runSpeed / 3.6) * (bufferMinutes * 60);
-      const deltaLat = runRadiusMeters / 111320;
-      const deltaLon = runRadiusMeters / (111320 * Math.cos((lat * Math.PI) / 180));
+      const walkRadiusMeters = (walkSpeed / 3.6) * (bufferMinutes * 60);
+      const deltaLat = walkRadiusMeters / 111320;
+      const deltaLon = walkRadiusMeters / (111320 * Math.cos((lat * Math.PI) / 180));
       const sw = fromLonLat([lon - deltaLon, lat - deltaLat]);
       const ne = fromLonLat([lon + deltaLon, lat + deltaLat]);
       mapInstance.getView().fit([sw[0], sw[1], ne[0], ne[1]], {
@@ -421,7 +420,6 @@ const Index = () => {
         routeMap={routeMap}
         userLocation={userLocation}
         walkSpeed={walkSpeed}
-        runSpeed={runSpeed}
         bufferMinutes={bufferMinutes}
         maxWalkDistanceMeters={maxWalkDistanceMeters}
         filteredStop={filteredStop}

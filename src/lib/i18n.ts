@@ -23,7 +23,6 @@ export interface AppStrings {
   walkSpeed: string;
   maxWalkDistance: string;
   maxWalkDistanceHint: string;
-  runSpeed: string;
   highAccuracyLocation: string;
   highAccuracyHint: string;
   stopVisibilityZoom: string;
@@ -188,11 +187,10 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     appCardTitle: "App preferences",
     appCardDescription: "Language selection and saved favourites for this device.",
     bufferTime: "Buffer time",
-    bufferTimeHint: "The circles on the map show the distance you can cover in this time.",
+    bufferTimeHint: "At these settings you can reach stops up to",
     walkSpeed: "Walking speed",
     maxWalkDistance: "Maximum walk to a stop",
     maxWalkDistanceHint: "The planner only considers stops within this distance from your saved places.",
-    runSpeed: "Running speed",
     highAccuracyLocation: "High accuracy location",
     highAccuracyHint: "Uses more battery. Live tracking and GPS now pause completely when the app is hidden or inactive.",
     stopVisibilityZoom: "Show stop markers from zoom level",
@@ -355,11 +353,10 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     appCardTitle: "Appinställningar",
     appCardDescription: "Språkval och sparade favoriter för den här enheten.",
     bufferTime: "Buffertid",
-    bufferTimeHint: "Cirklarna på kartan visar hur långt du hinner på den här tiden.",
+    bufferTimeHint: "Med dessa inställningar hinner du gå till hållplatser upp till",
     walkSpeed: "Gånghastighet",
     maxWalkDistance: "Max gångavstånd till hållplats",
     maxWalkDistanceHint: "Planeraren tar bara med hållplatser inom det här avståndet från dina sparade platser.",
-    runSpeed: "Löphastighet",
     highAccuracyLocation: "Hög platsnoggrannhet",
     highAccuracyHint: "Använder mer batteri. Liveuppdatering och GPS pausas nu helt när appen är dold eller inaktiv.",
     stopVisibilityZoom: "Visa hållplatsmarkörer från zoomnivå",

@@ -141,7 +141,6 @@ interface BusMapProps {
   routeMap: Record<string, string>;
   userLocation: [number, number] | null;
   walkSpeed: number;
-  runSpeed: number;
   bufferMinutes: number;
   maxWalkDistanceMeters: number;
   filteredStop: TransitStopGroup | null;
@@ -165,7 +164,6 @@ const BusMap = ({
   routeMap,
   userLocation,
   walkSpeed,
-  runSpeed,
   bufferMinutes,
   maxWalkDistanceMeters,
   filteredStop,
@@ -751,23 +749,7 @@ const BusMap = ({
       })
     );
     bufferSourceRef.current.addFeature(walkFeature);
-
-    const runRadius = (runSpeed / 3.6) * (bufferMinutes * 60);
-    const runCircle = circular([lon, lat], runRadius, 64);
-    runCircle.transform("EPSG:4326", "EPSG:3857");
-    const runFeature = new Feature(runCircle);
-    runFeature.setStyle(
-      new Style({
-        fill: new Fill({ color: "rgba(249, 115, 22, 0.06)" }),
-        stroke: new Stroke({
-          color: "rgba(249, 115, 22, 0.5)",
-          width: 2,
-          lineDash: [8, 4],
-        }),
-      })
-    );
-    bufferSourceRef.current.addFeature(runFeature);
-  }, [userLocation, walkSpeed, runSpeed, bufferMinutes]);
+  }, [userLocation, walkSpeed, bufferMinutes]);
 
   // Update saved-place markers
   useEffect(() => {
@@ -992,7 +974,6 @@ const BusMap = ({
             stopRoutes={stopRoutes}
             userLocation={userLocation}
             walkSpeed={walkSpeed}
-            runSpeed={runSpeed}
             maxWalkDistanceMeters={maxWalkDistanceMeters}
             isFavorite={isFavorite}
             onToggleFavorite={onToggleFavorite}

@@ -20,7 +20,6 @@ interface StopPopupProps {
   stopRoutes: Record<string, string[]>;
   userLocation: [number, number] | null;
   walkSpeed: number;
-  runSpeed: number;
   maxWalkDistanceMeters: number;
   onFilter: (stopGroup: TransitStopGroup) => void;
   onToggleFavorite?: (stop: TransitStop) => void;
@@ -586,7 +585,6 @@ export default function StopPopup({
   stopRoutes,
   userLocation,
   walkSpeed,
-  runSpeed,
   maxWalkDistanceMeters,
   onFilter,
   onToggleFavorite,
@@ -685,9 +683,8 @@ export default function StopPopup({
     const [lon, lat] = userLocation;
     const dist = haversineDistanceMeters(lat, lon, stopGroup.stop_lat, stopGroup.stop_lon);
     const walkMin = dist / (walkSpeed / 3.6) / 60;
-    const runMin = dist / (runSpeed / 3.6) / 60;
-    return { dist, walkMin, runMin };
-  }, [userLocation, stopGroup.stop_lat, stopGroup.stop_lon, walkSpeed, runSpeed]);
+    return { dist, walkMin };
+  }, [userLocation, stopGroup.stop_lat, stopGroup.stop_lon, walkSpeed]);
 
   return (
     <div>
@@ -706,8 +703,6 @@ export default function StopPopup({
                 <>
                   {" · "}
                   🚶 {Math.max(1, Math.round(distanceInfo.walkMin))} min
-                  {" · "}
-                  🏃 {Math.max(1, Math.round(distanceInfo.runMin))} min
                 </>
               )}
             </p>

@@ -180,12 +180,42 @@ function localizeTrafficType(messageType: string, language: SupportedLanguage) {
   return TRAFFIC_TYPE_TRANSLATIONS_EN[messageType] ?? messageType;
 }
 
+// ── Google walking distance (server-side proxy with client cache) ────────────
+
+interface WalkDistResult { distanceMeters: number; durationSeconds: number }
+const walkDistCache = new Map<string, WalkDistResult>();
+
+async function fetchGoogleWalkDist(
+  fromLat: number, fromLon: number,
+  toLat: number, toLon: number,
+): Promise<WalkDistResult | null> {
+  const key = `${fromLat.toFixed(3)},${fromLon.toFixed(3)},${toLat.toFixed(3)},${toLon.toFixed(3)}`;
+  const cached = walkDistCache.get(key);
+  if (cached) return cached;
+
+  try {
+    const params = new URLSearchParams({
+      fromLat: String(fromLat), fromLon: String(fromLon),
+      toLat: String(toLat), toLon: String(toLon),
+    });
+    const resp = await fetch(`/api/walk-distance?${params}`);
+    if (!resp.ok) return null;
+    const data = await resp.json() as WalkDistResult;
+    walkDistCache.set(key, data);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 function convertTrip(
   trip: ResRobotTrip,
   originCoords: { lat: number; lon: number },
   destCoords: { lat: number; lon: number },
   walkSpeed: number,
   bufferMinutes: number,
+  originWalkOverride: WalkDistResult | null = null,
+  destWalkOverride: WalkDistResult | null = null,
 ): CommuteOption | null {
   const transitLegs = trip.legs.filter((leg) => leg.type === "JNY");
   if (transitLegs.length === 0) return null;
@@ -220,6 +250,9 @@ function convertTrip(
   if (firstLeg.type === "WALK" && firstLeg.dist) {
     walkDistanceMeters = firstLeg.dist;
     walkSeconds = walkDistanceMeters / Math.max(walkSpeed / 3.6, 0.5);
+  } else if (originWalkOverride) {
+    walkDistanceMeters = originWalkOverride.distanceMeters;
+    walkSeconds = originWalkOverride.durationSeconds;
   } else {
     walkDistanceMeters = originStopDistanceMeters;
     walkSeconds = walkDistanceMeters / Math.max(walkSpeed / 3.6, 0.5);
@@ -232,6 +265,9 @@ function convertTrip(
   if (lastLeg.type === "WALK" && lastLeg.dist) {
     destinationWalkDistanceMeters = lastLeg.dist;
     destinationWalkSeconds = destinationWalkDistanceMeters / Math.max(walkSpeed / 3.6, 0.5);
+  } else if (destWalkOverride) {
+    destinationWalkDistanceMeters = destWalkOverride.distanceMeters;
+    destinationWalkSeconds = destWalkOverride.durationSeconds;
   } else {
     destinationWalkDistanceMeters = destinationStopDistanceMeters;
     destinationWalkSeconds = destinationWalkDistanceMeters / Math.max(walkSpeed / 3.6, 0.5);
@@ -418,8 +454,36 @@ export function useCommutePlans({
         };
       }
 
-      const options = data.trips
-        .map((trip) => convertTrip(trip, originCoords, destCoords, walkSpeed, bufferMinutes))
+      const options = await Promise.all(
+        data.trips.map(async (trip) => {
+          const transitLegs = trip.legs.filter((leg) => leg.type === "JNY");
+          const firstTransit = transitLegs[0];
+          const lastTransit = transitLegs[transitLegs.length - 1];
+          const firstLeg = trip.legs[0];
+          const lastLeg = trip.legs[trip.legs.length - 1];
+
+          // Only fetch Google walk distance when ResRobot has no walk leg with distance
+          const [originWalkOverride, destWalkOverride] = await Promise.all([
+            (firstLeg.type === "WALK" && firstLeg.dist)
+              ? Promise.resolve(null)
+              : fetchGoogleWalkDist(
+                  originCoords.lat, originCoords.lon,
+                  firstTransit?.origin.lat ?? originCoords.lat,
+                  firstTransit?.origin.lon ?? originCoords.lon,
+                ),
+            (lastLeg.type === "WALK" && lastLeg.dist)
+              ? Promise.resolve(null)
+              : fetchGoogleWalkDist(
+                  lastTransit?.destination.lat ?? destCoords.lat,
+                  lastTransit?.destination.lon ?? destCoords.lon,
+                  destCoords.lat, destCoords.lon,
+                ),
+          ]);
+
+          return convertTrip(trip, originCoords, destCoords, walkSpeed, bufferMinutes, originWalkOverride, destWalkOverride);
+        })
+      );
+      const sortedOptions = options
         .filter((opt): opt is CommuteOption => opt !== null)
         .sort((a, b) => a.score - b.score);
 
@@ -428,9 +492,9 @@ export function useCommutePlans({
         origin: pair.origin,
         destination: pair.destination,
         activeOrigin: pair.activeOrigin,
-        bestOption: options[0] ?? null,
-        fallbackOption: options[1] ?? null,
-        note: options.length === 0 ? "No suitable departure found right now." : null,
+        bestOption: sortedOptions[0] ?? null,
+        fallbackOption: sortedOptions[1] ?? null,
+        note: sortedOptions.length === 0 ? "No suitable departure found right now." : null,
       };
     }
 

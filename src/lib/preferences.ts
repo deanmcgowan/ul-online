@@ -2,7 +2,6 @@ export type LanguagePreference = "system" | "en-GB" | "sv-SE";
 
 export interface AppPreferences {
   walkSpeed: number;
-  runSpeed: number;
   bufferMinutes: number;
   maxWalkDistanceMeters: number;
   highAccuracyLocation: boolean;
@@ -12,7 +11,6 @@ export interface AppPreferences {
 
 export const PREFERENCE_STORAGE_KEYS = [
   "walkSpeed",
-  "runSpeed",
   "bufferMinutes",
   "maxWalkDistanceMeters",
   "highAccuracyLocation",
@@ -22,7 +20,6 @@ export const PREFERENCE_STORAGE_KEYS = [
 
 export const DEFAULT_PREFERENCES: AppPreferences = {
   walkSpeed: 4,
-  runSpeed: 9,
   bufferMinutes: 5,
   maxWalkDistanceMeters: 1000,
   highAccuracyLocation: false,
@@ -46,7 +43,6 @@ function readLanguagePreference(value: string | null): LanguagePreference {
 export function loadPreferences(): AppPreferences {
   return {
     walkSpeed: readNumber(localStorage.getItem("walkSpeed"), DEFAULT_PREFERENCES.walkSpeed),
-    runSpeed: readNumber(localStorage.getItem("runSpeed"), DEFAULT_PREFERENCES.runSpeed),
     bufferMinutes: readNumber(localStorage.getItem("bufferMinutes"), DEFAULT_PREFERENCES.bufferMinutes),
     maxWalkDistanceMeters: readNumber(localStorage.getItem("maxWalkDistanceMeters"), DEFAULT_PREFERENCES.maxWalkDistanceMeters),
     highAccuracyLocation: localStorage.getItem("highAccuracyLocation") === "true",
@@ -57,7 +53,6 @@ export function loadPreferences(): AppPreferences {
 
 export function savePreferences(preferences: AppPreferences): void {
   localStorage.setItem("walkSpeed", preferences.walkSpeed.toString());
-  localStorage.setItem("runSpeed", preferences.runSpeed.toString());
   localStorage.setItem("bufferMinutes", preferences.bufferMinutes.toString());
   localStorage.setItem("maxWalkDistanceMeters", preferences.maxWalkDistanceMeters.toString());
   localStorage.setItem("highAccuracyLocation", preferences.highAccuracyLocation.toString());
