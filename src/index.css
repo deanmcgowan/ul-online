@@ -2,6 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Prevent text selection throughout the app (mobile UI) */
+*,
+*::before,
+*::after {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Re-enable selection for actual text input fields */
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
 All colors MUST be HSL.
 */

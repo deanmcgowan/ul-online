@@ -1,25 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchStopTimesMulti } from "@/lib/api";
-import type { TransitStop, Vehicle } from "@/components/BusMap";
-import { bearingTowardStop } from "@/lib/busIcon";
+import { fetchResRobotTrip, type ResRobotTrip, type ResRobotLeg } from "@/lib/api";
+import type { TransitStop } from "@/components/BusMap";
 import type { RoadSituation } from "@/hooks/useRoadSituations";
 import type { SavedPlace } from "@/lib/savedPlaces";
-import { haversineDistanceMeters, pickBestUpcomingStopMatch, type StopTimeMatch } from "@/lib/transitMatching";
-import { estimateRemainingTripSeconds, type ScheduledStopTimeRow } from "@/lib/tripSchedules";
+import type { SupportedLanguage } from "@/lib/i18n";
+import { haversineDistanceMeters } from "@/lib/transitMatching";
 
-const PREFERRED_STOP_DISTANCE_METERS = 850;
-const MAX_STOPS_PER_PLACE = 6;
 const ACTIVE_PLACE_RADIUS_METERS = 900;
 const MAX_COMMUTE_CARDS = 3;
-const MAX_ROUTING_LOOKUPS = 4;
 
 type CommuteGuidance = "leave-now" | "leave-soon" | "wait";
 type CommuteConfidence = "high" | "medium" | "low";
-
-interface NearbyTransitStop {
-  stop: TransitStop;
-  distanceMeters: number;
-}
 
 export interface CommuteTrafficImpact {
   id: string;
@@ -27,6 +18,19 @@ export interface CommuteTrafficImpact {
   messageType: string;
   distanceMeters: number;
   webLink?: string;
+}
+
+export interface CommuteLeg {
+  type: "JNY" | "WALK" | "TRSF";
+  line: string | null;
+  name: string | null;
+  direction: string | null;
+  category: string | null;
+  originName: string;
+  originTime: string | null;
+  destinationName: string;
+  destinationTime: string | null;
+  distMeters: number | null;
 }
 
 export interface CommuteOption {
@@ -48,6 +52,11 @@ export interface CommuteOption {
   score: number;
   stopCount: number;
   trafficImpact: CommuteTrafficImpact | null;
+  legs: CommuteLeg[];
+  departureTime: string | null;
+  arrivalTime: string | null;
+  durationMinutes: number | null;
+  transfers: number;
 }
 
 export interface CommutePlan {
@@ -60,160 +69,56 @@ export interface CommutePlan {
   note: string | null;
 }
 
-interface RawCommuteOption {
-  vehicle: Vehicle;
-  lineNumber: string;
-  originStop: TransitStop;
-  destinationStop: TransitStop;
-  originStopDistanceMeters: number;
-  destinationStopDistanceMeters: number;
-  stopCount: number;
-  approximateEtaSeconds: number;
-  approximateScore: number;
-  isTowardOrigin: boolean;
-  scheduledEtaSeconds: number | null;
-}
+function buildJourneyPairs(savedPlaces: SavedPlace[], userLocation: [number, number] | null) {
+  const pairs: Array<{ origin: SavedPlace; destination: SavedPlace; activeOrigin: boolean }> = [];
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
+  if (userLocation) {
+    const currentLocationPlace: SavedPlace = {
+      id: "__current_location__",
+      kind: "other",
+      label: "",
+      displayName: "",
+      lat: userLocation[1],
+      lon: userLocation[0],
+      createdAt: 0,
+      updatedAt: 0,
+    };
 
-function getNearbyStops(lat: number, lon: number, stops: TransitStop[], maxWalkDistanceMeters: number, preferredStopId?: string): NearbyTransitStop[] {
-  const rankedStops = stops
-    .map((stop) => ({
-      stop,
-      distanceMeters: Math.round(haversineDistanceMeters(lat, lon, stop.stop_lat, stop.stop_lon)),
-    }))
-    .sort((left, right) => left.distanceMeters - right.distanceMeters);
+    const nearestPlace = savedPlaces
+      .map((place) => ({
+        place,
+        distanceMeters: haversineDistanceMeters(userLocation[1], userLocation[0], place.lat, place.lon),
+      }))
+      .sort((left, right) => left.distanceMeters - right.distanceMeters)[0];
 
-  const preferredStops = rankedStops
-    .filter((entry) => entry.distanceMeters <= Math.min(PREFERRED_STOP_DISTANCE_METERS, maxWalkDistanceMeters))
-    .slice(0, MAX_STOPS_PER_PLACE);
-
-  let result: NearbyTransitStop[];
-  if (preferredStops.length >= 2) {
-    result = preferredStops;
-  } else {
-    result = rankedStops
-      .filter((entry) => entry.distanceMeters <= maxWalkDistanceMeters)
-      .slice(0, MAX_STOPS_PER_PLACE);
-  }
-
-  // If a preferred stop is specified, ensure it's included and at the front
-  if (preferredStopId) {
-    const alreadyIncluded = result.some((entry) => entry.stop.stop_id === preferredStopId);
-    if (!alreadyIncluded) {
-      const preferred = rankedStops.find((entry) => entry.stop.stop_id === preferredStopId);
-      if (preferred) {
-        result = [preferred, ...result].slice(0, MAX_STOPS_PER_PLACE);
+    if (nearestPlace && nearestPlace.distanceMeters <= ACTIVE_PLACE_RADIUS_METERS) {
+      for (const destination of savedPlaces) {
+        if (destination.id === nearestPlace.place.id) continue;
+        pairs.push({ origin: nearestPlace.place, destination, activeOrigin: true });
       }
     } else {
-      // Move to front
-      result = [
-        ...result.filter((entry) => entry.stop.stop_id === preferredStopId),
-        ...result.filter((entry) => entry.stop.stop_id !== preferredStopId),
-      ];
+      for (const place of savedPlaces) {
+        pairs.push({ origin: currentLocationPlace, destination: place, activeOrigin: true });
+      }
     }
   }
 
-  return result;
-}
+  if (savedPlaces.length >= 2 && pairs.length < MAX_COMMUTE_CARDS) {
+    const home = savedPlaces.find((place) => place.kind === "home") ?? null;
+    const work = savedPlaces.find((place) => place.kind === "work") ?? null;
 
-function getApproximateVehicleEta(vehicle: Vehicle, targetStop: TransitStop, stopCount: number, isTowardOrigin: boolean) {
-  const directDistance = haversineDistanceMeters(
-    vehicle.lat,
-    vehicle.lon,
-    targetStop.stop_lat,
-    targetStop.stop_lon,
-  );
-  const assumedSpeed = Math.max(vehicle.speed || 0, 4);
-  const driveSeconds = directDistance / assumedSpeed;
-  const dwellPenaltySeconds = Math.max(0, stopCount - 1) * 25;
-  const headingPenaltySeconds = isTowardOrigin ? 0 : 90;
+    if (home && work) {
+      const exists1 = pairs.some((p) => p.origin.id === home.id && p.destination.id === work.id);
+      if (!exists1) pairs.push({ origin: home, destination: work, activeOrigin: false });
+      const exists2 = pairs.some((p) => p.origin.id === work.id && p.destination.id === home.id);
+      if (!exists2) pairs.push({ origin: work, destination: home, activeOrigin: false });
+    }
 
-  return Math.round(driveSeconds + dwellPenaltySeconds + headingPenaltySeconds);
-}
-
-async function getRoadDurationSeconds(vehicle: Vehicle, targetStop: TransitStop, signal?: AbortSignal) {
-  const url = new URL(
-    `https://router.project-osrm.org/route/v1/driving/${vehicle.lon},${vehicle.lat};${targetStop.stop_lon},${targetStop.stop_lat}`,
-  );
-  url.searchParams.set("overview", "false");
-  url.searchParams.set("alternatives", "false");
-  url.searchParams.set("steps", "false");
-
-  const response = await fetch(url, { signal });
-  if (!response.ok) {
-    throw new Error(`Routing service returned ${response.status}`);
-  }
-
-  const data = (await response.json()) as { routes?: Array<{ duration?: number }> };
-  return data.routes?.[0]?.duration ?? null;
-}
-
-function getCommuteGuidance(slackSeconds: number): CommuteGuidance {
-  if (slackSeconds <= 0) {
-    return "leave-now";
-  }
-
-  if (slackSeconds <= 120) {
-    return "leave-soon";
-  }
-
-  return "wait";
-}
-
-function getCommuteConfidence(slackSeconds: number): CommuteConfidence {
-  if (slackSeconds >= 5 * 60) {
-    return "high";
-  }
-
-  if (slackSeconds >= 2 * 60) {
-    return "medium";
-  }
-
-  return "low";
-}
-
-function buildJourneyPairs(savedPlaces: SavedPlace[], userLocation: [number, number] | null) {
-  if (savedPlaces.length < 2) {
-    return [] as Array<{ origin: SavedPlace; destination: SavedPlace; activeOrigin: boolean }>;
-  }
-
-  const activeOrigin = userLocation
-    ? savedPlaces
-        .map((place) => ({
-          place,
-          distanceMeters: haversineDistanceMeters(userLocation[1], userLocation[0], place.lat, place.lon),
-        }))
-        .sort((left, right) => left.distanceMeters - right.distanceMeters)[0]
-    : null;
-
-  if (activeOrigin && activeOrigin.distanceMeters <= ACTIVE_PLACE_RADIUS_METERS) {
-    return savedPlaces
-      .filter((place) => place.id !== activeOrigin.place.id)
-      .slice(0, MAX_COMMUTE_CARDS)
-      .map((destination) => ({ origin: activeOrigin.place, destination, activeOrigin: true }));
-  }
-
-  const home = savedPlaces.find((place) => place.kind === "home") ?? null;
-  const work = savedPlaces.find((place) => place.kind === "work") ?? null;
-  const pairs: Array<{ origin: SavedPlace; destination: SavedPlace; activeOrigin: boolean }> = [];
-
-  if (home && work) {
-    pairs.push({ origin: home, destination: work, activeOrigin: false });
-    pairs.push({ origin: work, destination: home, activeOrigin: false });
-  }
-
-  for (const origin of savedPlaces) {
-    for (const destination of savedPlaces) {
-      if (origin.id === destination.id) {
-        continue;
-      }
-
-      const exists = pairs.some((pair) => pair.origin.id === origin.id && pair.destination.id === destination.id);
-      if (!exists) {
-        pairs.push({ origin, destination, activeOrigin: false });
+    for (const origin of savedPlaces) {
+      for (const destination of savedPlaces) {
+        if (origin.id === destination.id) continue;
+        const exists = pairs.some((p) => p.origin.id === origin.id && p.destination.id === destination.id);
+        if (!exists) pairs.push({ origin, destination, activeOrigin: false });
       }
     }
   }
@@ -221,59 +126,213 @@ function buildJourneyPairs(savedPlaces: SavedPlace[], userLocation: [number, num
   return pairs.slice(0, MAX_COMMUTE_CARDS);
 }
 
-function getOriginReferencePoint(origin: SavedPlace, userLocation: [number, number] | null) {
-  if (!userLocation) {
-    return { lat: origin.lat, lon: origin.lon };
-  }
-
-  const userDistanceToOrigin = haversineDistanceMeters(userLocation[1], userLocation[0], origin.lat, origin.lon);
-  if (userDistanceToOrigin <= ACTIVE_PLACE_RADIUS_METERS) {
+function getOriginCoords(origin: SavedPlace, userLocation: [number, number] | null) {
+  if (origin.id === "__current_location__" && userLocation) {
     return { lat: userLocation[1], lon: userLocation[0] };
   }
-
+  if (userLocation) {
+    const dist = haversineDistanceMeters(userLocation[1], userLocation[0], origin.lat, origin.lon);
+    if (dist <= ACTIVE_PLACE_RADIUS_METERS) {
+      return { lat: userLocation[1], lon: userLocation[0] };
+    }
+  }
   return { lat: origin.lat, lon: origin.lon };
 }
 
-function getTrafficImpactForOption(option: CommuteOption, situations: RoadSituation[]): CommuteTrafficImpact | null {
-  if (situations.length === 0) {
-    return null;
+function parseTimeToSeconds(time: string | null) {
+  if (!time) return null;
+  const parts = time.split(":");
+  if (parts.length < 2) return null;
+  return Number(parts[0]) * 3600 + Number(parts[1]) * 60 + (Number(parts[2] ?? 0));
+}
+
+function parseDurationMinutes(duration: string | null) {
+  if (!duration) return null;
+  const match = /^PT(?:(\d+)H)?(?:(\d+)M)?/.exec(duration);
+  if (!match) return null;
+  return (Number(match[1] ?? 0)) * 60 + Number(match[2] ?? 0);
+}
+
+function makeSyntheticStop(name: string | null, lat: number | null, lon: number | null, extId: string | null): TransitStop {
+  return {
+    stop_id: extId ?? `synth_${(name ?? "unknown").replace(/\s+/g, "_")}_${lat}_${lon}`,
+    stop_name: name ?? "Unknown stop",
+    stop_lat: lat ?? 0,
+    stop_lon: lon ?? 0,
+  };
+}
+
+const TRAFFIC_TYPE_TRANSLATIONS_EN: Record<string, string> = {
+  "Vägarbete": "Roadwork",
+  "Beläggningsarbete": "Road surfacing",
+  "Trafikstörning": "Traffic disruption",
+  "Olycka": "Accident",
+  "Risk för kö": "Risk of queue",
+  "Kö": "Queue",
+  "Fordonshaveri": "Vehicle breakdown",
+  "Väder": "Weather",
+  "Evenemang": "Event",
+  "Övrigt": "Other",
+};
+
+function localizeTrafficType(messageType: string, language: SupportedLanguage) {
+  if (language === "sv-SE") return messageType;
+  return TRAFFIC_TYPE_TRANSLATIONS_EN[messageType] ?? messageType;
+}
+
+function convertTrip(
+  trip: ResRobotTrip,
+  originCoords: { lat: number; lon: number },
+  destCoords: { lat: number; lon: number },
+  walkSpeed: number,
+  bufferMinutes: number,
+): CommuteOption | null {
+  const transitLegs = trip.legs.filter((leg) => leg.type === "JNY");
+  if (transitLegs.length === 0) return null;
+
+  const firstTransit = transitLegs[0];
+  const lastTransit = transitLegs[transitLegs.length - 1];
+
+  const originStop = makeSyntheticStop(
+    firstTransit.origin.name,
+    firstTransit.origin.lat,
+    firstTransit.origin.lon,
+    firstTransit.origin.extId,
+  );
+  const destinationStop = makeSyntheticStop(
+    lastTransit.destination.name,
+    lastTransit.destination.lat,
+    lastTransit.destination.lon,
+    lastTransit.destination.extId,
+  );
+
+  const originStopDistanceMeters = Math.round(
+    haversineDistanceMeters(originCoords.lat, originCoords.lon, originStop.stop_lat, originStop.stop_lon),
+  );
+  const destinationStopDistanceMeters = Math.round(
+    haversineDistanceMeters(destCoords.lat, destCoords.lon, destinationStop.stop_lat, destinationStop.stop_lon),
+  );
+
+  // Walk time to first transit stop
+  const firstLeg = trip.legs[0];
+  let walkSeconds = 0;
+  let walkDistanceMeters = 0;
+  if (firstLeg.type === "WALK" && firstLeg.dist) {
+    walkDistanceMeters = firstLeg.dist;
+    walkSeconds = walkDistanceMeters / Math.max(walkSpeed / 3.6, 0.5);
+  } else {
+    walkDistanceMeters = originStopDistanceMeters;
+    walkSeconds = walkDistanceMeters / Math.max(walkSpeed / 3.6, 0.5);
   }
+
+  // Walk from last transit stop to destination
+  const lastLeg = trip.legs[trip.legs.length - 1];
+  let destinationWalkDistanceMeters = 0;
+  let destinationWalkSeconds = 0;
+  if (lastLeg.type === "WALK" && lastLeg.dist) {
+    destinationWalkDistanceMeters = lastLeg.dist;
+    destinationWalkSeconds = destinationWalkDistanceMeters / Math.max(walkSpeed / 3.6, 0.5);
+  } else {
+    destinationWalkDistanceMeters = destinationStopDistanceMeters;
+    destinationWalkSeconds = destinationWalkDistanceMeters / Math.max(walkSpeed / 3.6, 0.5);
+  }
+
+  // Timing: seconds from now until first transit departs
+  const now = new Date();
+  const nowSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+  const departureSeconds = parseTimeToSeconds(firstTransit.origin.time);
+  let vehicleEtaSeconds = 0;
+  if (departureSeconds !== null) {
+    vehicleEtaSeconds = departureSeconds - nowSeconds;
+    if (vehicleEtaSeconds < -3600) vehicleEtaSeconds += 86400; // next day wrap
+  }
+
+  const slackSeconds = Math.round(vehicleEtaSeconds - walkSeconds - bufferMinutes * 60);
+  const durationMinutes = parseDurationMinutes(trip.duration);
+  const transfers = Math.max(0, transitLegs.length - 1);
+
+  const guidance: CommuteGuidance = slackSeconds <= 0 ? "leave-now" : slackSeconds <= 120 ? "leave-soon" : "wait";
+  const confidence: CommuteConfidence = slackSeconds >= 300 ? "high" : slackSeconds >= 120 ? "medium" : "low";
+  const score = vehicleEtaSeconds + destinationWalkSeconds * 0.4 + Math.max(0, -slackSeconds) * 3 + transfers * 60;
+
+  const lineNumber = firstTransit.line ?? firstTransit.name ?? "?";
+
+  const legs: CommuteLeg[] = trip.legs.map((leg) => ({
+    type: (leg.type === "JNY" || leg.type === "WALK" || leg.type === "TRSF" ? leg.type : "WALK") as CommuteLeg["type"],
+    line: leg.line,
+    name: leg.name,
+    direction: leg.direction,
+    category: leg.category,
+    originName: leg.origin.name ?? "?",
+    originTime: leg.origin.time?.slice(0, 5) ?? null,
+    destinationName: leg.destination.name ?? "?",
+    destinationTime: leg.destination.time?.slice(0, 5) ?? null,
+    distMeters: leg.dist,
+  }));
+
+  return {
+    lineNumber,
+    tripId: "",
+    vehicleId: "",
+    originStop,
+    destinationStop,
+    originStopDistanceMeters,
+    destinationStopDistanceMeters,
+    walkDistanceMeters: Math.round(walkDistanceMeters),
+    walkSeconds: Math.round(walkSeconds),
+    destinationWalkDistanceMeters: Math.round(destinationWalkDistanceMeters),
+    destinationWalkSeconds: Math.round(destinationWalkSeconds),
+    vehicleEtaSeconds: Math.round(Math.max(0, vehicleEtaSeconds)),
+    slackSeconds: Math.round(slackSeconds),
+    guidance,
+    confidence,
+    score,
+    stopCount: 0,
+    trafficImpact: null,
+    legs,
+    departureTime: firstTransit.origin.time?.slice(0, 5) ?? null,
+    arrivalTime: lastTransit.destination.time?.slice(0, 5) ?? null,
+    durationMinutes,
+    transfers,
+  };
+}
+
+function getTrafficImpactForOption(
+  option: CommuteOption,
+  situations: RoadSituation[],
+  language: SupportedLanguage,
+): CommuteTrafficImpact | null {
+  if (situations.length === 0) return null;
 
   const midpoint = {
     lat: (option.originStop.stop_lat + option.destinationStop.stop_lat) / 2,
     lon: (option.originStop.stop_lon + option.destinationStop.stop_lon) / 2,
   };
 
-  const rankedSituations = situations
+  const ranked = situations
     .map((situation) => {
-      const originDistance = haversineDistanceMeters(option.originStop.stop_lat, option.originStop.stop_lon, situation.lat, situation.lon);
-      const destinationDistance = haversineDistanceMeters(option.destinationStop.stop_lat, option.destinationStop.stop_lon, situation.lat, situation.lon);
-      const midpointDistance = haversineDistanceMeters(midpoint.lat, midpoint.lon, situation.lat, situation.lon);
-      const distanceMeters = Math.round(Math.min(originDistance, destinationDistance, midpointDistance));
-
-      return { situation, distanceMeters };
+      const originDist = haversineDistanceMeters(option.originStop.stop_lat, option.originStop.stop_lon, situation.lat, situation.lon);
+      const destDist = haversineDistanceMeters(option.destinationStop.stop_lat, option.destinationStop.stop_lon, situation.lat, situation.lon);
+      const midDist = haversineDistanceMeters(midpoint.lat, midpoint.lon, situation.lat, situation.lon);
+      return { situation, distanceMeters: Math.round(Math.min(originDist, destDist, midDist)) };
     })
-    .filter((entry) => entry.distanceMeters <= 2500)
-    .sort((left, right) => left.distanceMeters - right.distanceMeters);
+    .filter((e) => e.distanceMeters <= 2500)
+    .sort((a, b) => a.distanceMeters - b.distanceMeters);
 
-  const closestSituation = rankedSituations[0];
-  if (!closestSituation) {
-    return null;
-  }
+  const closest = ranked[0];
+  if (!closest) return null;
 
   return {
-    id: closestSituation.situation.id,
-    label: closestSituation.situation.header || closestSituation.situation.messageType,
-    messageType: closestSituation.situation.messageType,
-    distanceMeters: closestSituation.distanceMeters,
-    webLink: closestSituation.situation.webLink || undefined,
+    id: closest.situation.id,
+    label: localizeTrafficType(closest.situation.messageType, language),
+    messageType: closest.situation.messageType,
+    distanceMeters: closest.distanceMeters,
+    webLink: closest.situation.webLink || undefined,
   };
 }
 
 export function getTrafficQueryForPlan(plan: CommutePlan | null) {
-  if (!plan?.bestOption) {
-    return null;
-  }
+  if (!plan?.bestOption) return null;
 
   const { originStop, destinationStop } = plan.bestOption;
   const midpointLat = (originStop.stop_lat + destinationStop.stop_lat) / 2;
@@ -288,7 +347,7 @@ export function getTrafficQueryForPlan(plan: CommutePlan | null) {
   return {
     lat: Number(midpointLat.toFixed(6)),
     lon: Number(midpointLon.toFixed(6)),
-    radiusMeters: clamp(Math.round(journeyDistance * 0.8), 2500, 10000),
+    radiusMeters: Math.min(10000, Math.max(2500, Math.round(journeyDistance * 0.8))),
     limit: 6,
   };
 }
@@ -296,24 +355,16 @@ export function getTrafficQueryForPlan(plan: CommutePlan | null) {
 export function useCommutePlans({
   savedPlaces,
   userLocation,
-  stops,
-  stopRoutes,
-  routeMap,
-  vehicles,
   walkSpeed,
   bufferMinutes,
-  maxWalkDistanceMeters,
+  language,
   roadSituations = [],
 }: {
   savedPlaces: SavedPlace[];
   userLocation: [number, number] | null;
-  stops: TransitStop[];
-  stopRoutes: Record<string, string[]>;
-  routeMap: Record<string, string>;
-  vehicles: Vehicle[];
   walkSpeed: number;
   bufferMinutes: number;
-  maxWalkDistanceMeters: number;
+  language: SupportedLanguage;
   roadSituations?: RoadSituation[];
 }) {
   const [plans, setPlans] = useState<CommutePlan[]>([]);
@@ -325,31 +376,29 @@ export function useCommutePlans({
   );
 
   useEffect(() => {
-    if (journeyPairs.length === 0 || stops.length === 0 || vehicles.length === 0) {
-      setPlans(
-        journeyPairs.map((pair) => ({
-          id: `${pair.origin.id}:${pair.destination.id}`,
-          origin: pair.origin,
-          destination: pair.destination,
-          activeOrigin: pair.activeOrigin,
-          bestOption: null,
-          fallbackOption: null,
-          note: stops.length === 0 ? null : "No live departures available right now.",
-        })),
-      );
+    if (journeyPairs.length === 0) {
+      setPlans([]);
       setLoading(false);
       return;
     }
 
     let cancelled = false;
-    const controller = new AbortController();
 
     async function buildPlan(pair: (typeof journeyPairs)[number]): Promise<CommutePlan> {
-      const originReference = getOriginReferencePoint(pair.origin, userLocation);
-      const originStops = getNearbyStops(originReference.lat, originReference.lon, stops, maxWalkDistanceMeters, pair.origin.preferredStopId);
-      const destinationStops = getNearbyStops(pair.destination.lat, pair.destination.lon, stops, maxWalkDistanceMeters, pair.destination.preferredStopId);
+      const originCoords = getOriginCoords(pair.origin, userLocation);
+      const destCoords = { lat: pair.destination.lat, lon: pair.destination.lon };
 
-      if (originStops.length === 0 || destinationStops.length === 0) {
+      const { data, error } = await fetchResRobotTrip({
+        originLat: originCoords.lat,
+        originLon: originCoords.lon,
+        destLat: destCoords.lat,
+        destLon: destCoords.lon,
+        numF: 3,
+        lang: language === "sv-SE" ? "sv" : "en",
+        walkSpeedKmh: walkSpeed,
+      });
+
+      if (error || !data?.trips?.length) {
         return {
           id: `${pair.origin.id}:${pair.destination.id}`,
           origin: pair.origin,
@@ -357,248 +406,37 @@ export function useCommutePlans({
           activeOrigin: pair.activeOrigin,
           bestOption: null,
           fallbackOption: null,
-          note: "No relevant stop is within your walking limit for this commute.",
+          note: error ? "Could not reach the journey planner right now." : "No upcoming journey found for this route.",
         };
       }
 
-      const originStopIds = originStops.map((entry) => entry.stop.stop_id);
-      const destinationStopIds = destinationStops.map((entry) => entry.stop.stop_id);
-      const originRouteIds = new Set(originStopIds.flatMap((stopId) => stopRoutes[stopId] ?? []));
-      const destinationRouteIds = new Set(destinationStopIds.flatMap((stopId) => stopRoutes[stopId] ?? []));
-      const matchingRouteIds = [...originRouteIds].filter((routeId) => destinationRouteIds.has(routeId));
-
-      if (matchingRouteIds.length === 0) {
-        return {
-          id: `${pair.origin.id}:${pair.destination.id}`,
-          origin: pair.origin,
-          destination: pair.destination,
-          activeOrigin: pair.activeOrigin,
-          bestOption: null,
-          fallbackOption: null,
-          note: "No direct live route was found between these places right now.",
-        };
-      }
-
-      const candidateVehicles = vehicles.filter((vehicle) => vehicle.tripId && matchingRouteIds.includes(vehicle.routeId));
-      if (candidateVehicles.length === 0) {
-        return {
-          id: `${pair.origin.id}:${pair.destination.id}`,
-          origin: pair.origin,
-          destination: pair.destination,
-          activeOrigin: pair.activeOrigin,
-          bestOption: null,
-          fallbackOption: null,
-          note: "Relevant lines are not reporting live vehicles right now.",
-        };
-      }
-
-      const { data: stData, error } = await fetchStopTimesMulti(
-        [...new Set(candidateVehicles.map((vehicle) => vehicle.tripId))]
-      );
-      const data = stData?.data ?? null;
-
-      if (error) {
-        throw error;
-      }
-
-      const stopTimes = (data ?? []) as ScheduledStopTimeRow[];
-      const originStopMap = new Map(originStops.map((entry) => [entry.stop.stop_id, entry.stop]));
-      const destinationStopMap = new Map(destinationStops.map((entry) => [entry.stop.stop_id, entry.stop]));
-      const selectedOriginStop = originStops[0].stop;
-      const rawOptions: RawCommuteOption[] = [];
-
-      for (const vehicle of candidateVehicles) {
-        const vehicleStopTimes = stopTimes.filter((stopTime) => stopTime.trip_id === vehicle.tripId);
-        const originMatch = pickBestUpcomingStopMatch(
-          vehicleStopTimes.filter((stopTime) => originStopMap.has(stopTime.stop_id)),
-          vehicle,
-          selectedOriginStop,
-          originStopMap,
-        );
-
-        if (!originMatch) {
-          continue;
-        }
-
-        const destinationMatch = vehicleStopTimes
-          .filter((stopTime) => destinationStopMap.has(stopTime.stop_id) && stopTime.stop_sequence > originMatch.stop_sequence)
-          .sort((left, right) => {
-            if (left.stop_sequence !== right.stop_sequence) {
-              return left.stop_sequence - right.stop_sequence;
-            }
-
-            const leftStop = destinationStopMap.get(left.stop_id);
-            const rightStop = destinationStopMap.get(right.stop_id);
-            const leftDistance = leftStop
-              ? haversineDistanceMeters(pair.destination.lat, pair.destination.lon, leftStop.stop_lat, leftStop.stop_lon)
-              : Number.POSITIVE_INFINITY;
-            const rightDistance = rightStop
-              ? haversineDistanceMeters(pair.destination.lat, pair.destination.lon, rightStop.stop_lat, rightStop.stop_lon)
-              : Number.POSITIVE_INFINITY;
-
-            return leftDistance - rightDistance;
-          })[0];
-
-        if (!destinationMatch) {
-          continue;
-        }
-
-        const originStop = originStopMap.get(originMatch.stop_id);
-        const destinationStop = destinationStopMap.get(destinationMatch.stop_id);
-        if (!originStop || !destinationStop) {
-          continue;
-        }
-
-        const originStopDistanceMeters = Math.round(
-          haversineDistanceMeters(originReference.lat, originReference.lon, originStop.stop_lat, originStop.stop_lon),
-        );
-        const destinationStopDistanceMeters = Math.round(
-          haversineDistanceMeters(pair.destination.lat, pair.destination.lon, destinationStop.stop_lat, destinationStop.stop_lon),
-        );
-        const stopCount = destinationMatch.stop_sequence - originMatch.stop_sequence;
-        const isTowardOrigin = bearingTowardStop(
-          vehicle.lat,
-          vehicle.lon,
-          vehicle.bearing,
-          originStop.stop_lat,
-          originStop.stop_lon,
-        );
-
-        const approximateScore =
-          (estimateRemainingTripSeconds(vehicle, vehicleStopTimes, originMatch.stop_sequence) ?? getApproximateVehicleEta(vehicle, originStop, stopCount, isTowardOrigin)) +
-          Math.round(originStopDistanceMeters * 0.9) +
-          Math.round(destinationStopDistanceMeters * 0.35);
-
-        const scheduledEtaSeconds = estimateRemainingTripSeconds(vehicle, vehicleStopTimes, originMatch.stop_sequence);
-
-        rawOptions.push({
-          vehicle,
-          lineNumber: routeMap[vehicle.routeId] || vehicle.vehicleLabel || "?",
-          originStop,
-          destinationStop,
-          originStopDistanceMeters,
-          destinationStopDistanceMeters,
-          stopCount,
-          approximateEtaSeconds: scheduledEtaSeconds ?? getApproximateVehicleEta(vehicle, originStop, stopCount, isTowardOrigin),
-          approximateScore,
-          isTowardOrigin,
-          scheduledEtaSeconds,
-        });
-      }
-
-      if (rawOptions.length === 0) {
-        return {
-          id: `${pair.origin.id}:${pair.destination.id}`,
-          origin: pair.origin,
-          destination: pair.destination,
-          activeOrigin: pair.activeOrigin,
-          bestOption: null,
-          fallbackOption: null,
-          note: "No upcoming live departure matched this commute right now.",
-        };
-      }
-
-      const refinedOptions = await Promise.all(
-        rawOptions
-          .sort((left, right) => left.approximateScore - right.approximateScore)
-          .slice(0, MAX_ROUTING_LOOKUPS)
-          .map(async (option) => {
-            let vehicleEtaSeconds = option.approximateEtaSeconds;
-
-            try {
-              if (option.scheduledEtaSeconds !== null) {
-                vehicleEtaSeconds = option.scheduledEtaSeconds;
-              } else {
-              const routeDurationSeconds = await getRoadDurationSeconds(option.vehicle, option.originStop, controller.signal);
-              if (routeDurationSeconds !== null) {
-                vehicleEtaSeconds = Math.round(routeDurationSeconds + Math.max(0, option.stopCount - 1) * 25 + (option.isTowardOrigin ? 0 : 90));
-              }
-              }
-            } catch {
-              vehicleEtaSeconds = option.approximateEtaSeconds;
-            }
-
-            const walkDistanceMeters = Math.round(
-              haversineDistanceMeters(originReference.lat, originReference.lon, option.originStop.stop_lat, option.originStop.stop_lon),
-            );
-            const walkSeconds = walkDistanceMeters / (Math.max(walkSpeed, 1) / 3.6);
-            const destinationWalkDistanceMeters = Math.round(
-              haversineDistanceMeters(pair.destination.lat, pair.destination.lon, option.destinationStop.stop_lat, option.destinationStop.stop_lon),
-            );
-            const destinationWalkSeconds = destinationWalkDistanceMeters / (Math.max(walkSpeed, 1) / 3.6);
-            const slackSeconds = Math.round(vehicleEtaSeconds - walkSeconds - bufferMinutes * 60);
-            const trafficImpact = getTrafficImpactForOption(
-              {
-                lineNumber: option.lineNumber,
-                tripId: option.vehicle.tripId,
-                vehicleId: option.vehicle.vehicleId,
-                originStop: option.originStop,
-                destinationStop: option.destinationStop,
-                originStopDistanceMeters: option.originStopDistanceMeters,
-                destinationStopDistanceMeters: option.destinationStopDistanceMeters,
-                walkDistanceMeters,
-                walkSeconds,
-                destinationWalkDistanceMeters,
-                destinationWalkSeconds,
-                vehicleEtaSeconds,
-                slackSeconds,
-                guidance: getCommuteGuidance(slackSeconds),
-                confidence: getCommuteConfidence(slackSeconds),
-                score: 0,
-                stopCount: option.stopCount,
-                trafficImpact: null,
-              },
-              roadSituations,
-            );
-            const trafficPenalty = trafficImpact ? 120 : 0;
-            const score = vehicleEtaSeconds + Math.round(destinationWalkSeconds * 0.4) + Math.max(0, -slackSeconds) * 3 + trafficPenalty;
-
-            return {
-              lineNumber: option.lineNumber,
-              tripId: option.vehicle.tripId,
-              vehicleId: option.vehicle.vehicleId,
-              originStop: option.originStop,
-              destinationStop: option.destinationStop,
-              originStopDistanceMeters: option.originStopDistanceMeters,
-              destinationStopDistanceMeters: option.destinationStopDistanceMeters,
-              walkDistanceMeters,
-              walkSeconds,
-              destinationWalkDistanceMeters,
-              destinationWalkSeconds,
-              vehicleEtaSeconds,
-              slackSeconds,
-              guidance: getCommuteGuidance(slackSeconds),
-              confidence: getCommuteConfidence(slackSeconds),
-              score,
-              stopCount: option.stopCount,
-              trafficImpact,
-            } satisfies CommuteOption;
-          }),
-      );
-
-      const rankedOptions = refinedOptions.sort((left, right) => left.score - right.score);
+      const options = data.trips
+        .map((trip) => convertTrip(trip, originCoords, destCoords, walkSpeed, bufferMinutes))
+        .filter((opt): opt is CommuteOption => opt !== null)
+        .map((opt) => ({
+          ...opt,
+          trafficImpact: getTrafficImpactForOption(opt, roadSituations, language),
+        }))
+        .sort((a, b) => a.score - b.score);
 
       return {
         id: `${pair.origin.id}:${pair.destination.id}`,
         origin: pair.origin,
         destination: pair.destination,
         activeOrigin: pair.activeOrigin,
-        bestOption: rankedOptions[0] ?? null,
-        fallbackOption: rankedOptions[1] ?? null,
-        note: rankedOptions[0] ? null : "No reliable live journey is available right now.",
+        bestOption: options[0] ?? null,
+        fallbackOption: options[1] ?? null,
+        note: options.length === 0 ? "No suitable departure found right now." : null,
       };
     }
 
     async function loadPlans() {
       setLoading(true);
-
       try {
         const nextPlans = await Promise.all(journeyPairs.map(buildPlan));
-        if (!cancelled) {
-          setPlans(nextPlans);
-        }
-      } catch (error) {
-        console.warn("Commute planning failed", error);
+        if (!cancelled) setPlans(nextPlans);
+      } catch (err) {
+        console.warn("Commute planning failed", err);
         if (!cancelled) {
           setPlans(
             journeyPairs.map((pair) => ({
@@ -613,19 +451,13 @@ export function useCommutePlans({
           );
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
 
     loadPlans();
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [bufferMinutes, journeyPairs, maxWalkDistanceMeters, roadSituations, routeMap, stopRoutes, stops, userLocation, vehicles, walkSpeed]);
+    return () => { cancelled = true; };
+  }, [bufferMinutes, journeyPairs, language, roadSituations, userLocation, walkSpeed]);
 
   return { plans, loading };
 }

@@ -125,13 +125,9 @@ const Index = () => {
   const { plans: commutePlans, loading: commuteLoading } = useCommutePlans({
     savedPlaces,
     userLocation,
-    stops,
-    stopRoutes,
-    routeMap,
-    vehicles,
     walkSpeed,
     bufferMinutes,
-    maxWalkDistanceMeters,
+    language: resolvedLanguage,
     roadSituations,
   });
   const likelyPlan = useMemo(
@@ -139,7 +135,7 @@ const Index = () => {
     [commutePlans],
   );
   const likelyCommuteQuery = useMemo(() => getTrafficQueryForPlan(likelyPlan), [likelyPlan]);
-  const hasEnoughPlaces = savedPlaces.length >= 2;
+  const hasEnoughPlaces = savedPlaces.length >= 1;
 
   const stopLocationTracking = useCallback(() => {
     if (watchIdRef.current !== null) {
@@ -481,6 +477,7 @@ const Index = () => {
         plans={commutePlans}
         loading={commuteLoading}
         hasEnoughPlaces={hasEnoughPlaces}
+        hasLocation={userLocation !== null}
         onOpenSettings={() => navigate("/settings")}
         onSelectPlan={handleCommutePlanSelect}
         activePlanId={activeCommutePlanId}

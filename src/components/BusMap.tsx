@@ -174,7 +174,7 @@ const BusMap = ({
   onMapReady,
   isFavorite,
   onToggleFavorite,
-  stopVisibilityZoom = 14,
+  stopVisibilityZoom = 12,
   stopRoutes = {},
   highlightedStop = null,
   tripDelayMap,
@@ -277,6 +277,7 @@ const BusMap = ({
 
     const stopsLayer = new VectorLayer({
       source: stopsCluster,
+      zIndex: 5,
       style: (feature) => {
         const clusteredFeatures = feature.get("features") as Feature[] | undefined;
         const clusterSize = clusteredFeatures?.length ?? 1;

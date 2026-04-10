@@ -109,10 +109,14 @@ export interface AppStrings {
   commuteDashboardEmptyTitle: string;
   commuteDashboardEmptyDescription: string;
   addPlacesToStart: string;
+  toPlace: (label: string) => string;
+  yourLocation: string;
+  enableLocationForCommute: string;
   likelyNow: string;
   calculatingCommute: string;
   bestOption: string;
   fallbackOption: string;
+  nextDeparture: string;
   walkToStop: string;
   walkFromStop: string;
   vehicleToStop: string;
@@ -131,6 +135,11 @@ export interface AppStrings {
   leaveNow: string;
   leaveSoon: string;
   leaveIn: (minutesText: string) => string;
+  departsAt: (time: string) => string;
+  walk: string;
+  transfer: string;
+  totalDuration: (minutes: number) => string;
+  transfers: (count: number) => string;
   trafficMayAffect: string;
   commuteTrafficAlertTitle: string;
   commuteTrafficAlertDescription: (origin: string, destination: string, incident: string) => string;
@@ -256,12 +265,16 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     distanceAway: (meters) => meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${meters} m`,
     commuteDashboardTitle: "Commute now",
     commuteDashboardEmptyTitle: "Set up saved places",
-    commuteDashboardEmptyDescription: "Add at least two saved places to see live place-to-place commute suggestions.",
+    commuteDashboardEmptyDescription: "Add a saved place to see live commute suggestions.",
     addPlacesToStart: "Add saved places",
+    toPlace: (label) => `To ${label}`,
+    yourLocation: "Your location",
+    enableLocationForCommute: "Enable location to see live commute options",
     likelyNow: "Likely now",
     calculatingCommute: "Calculating live commute options...",
     bestOption: "Best option",
     fallbackOption: "Fallback",
+    nextDeparture: "Next",
     walkToStop: "Walk to stop",
     walkFromStop: "Walk from stop",
     vehicleToStop: "Bus to stop",
@@ -280,6 +293,11 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     leaveNow: "Leave now",
     leaveSoon: "Leave soon",
     leaveIn: (minutesText) => `Leave in ${minutesText}`,
+    departsAt: (time) => `Departs ${time}`,
+    walk: "Walk",
+    transfer: "Transfer",
+    totalDuration: (minutes) => `${minutes} min total`,
+    transfers: (count) => `${count} transfer${count === 1 ? "" : "s"}`,
     trafficMayAffect: "Traffic may affect this trip",
     commuteTrafficAlertTitle: "Journey alert",
     commuteTrafficAlertDescription: (origin, destination, incident) => `${origin} to ${destination} may be affected by ${incident}.`,
@@ -403,12 +421,16 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     distanceAway: (meters) => meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${meters} m`,
     commuteDashboardTitle: "Pendla nu",
     commuteDashboardEmptyTitle: "Ställ in sparade platser",
-    commuteDashboardEmptyDescription: "Lägg till minst två sparade platser för att se liveförslag mellan platser.",
+    commuteDashboardEmptyDescription: "Lägg till en sparad plats för att se liveförslag.",
     addPlacesToStart: "Lägg till sparade platser",
+    toPlace: (label) => `Till ${label}`,
+    yourLocation: "Din plats",
+    enableLocationForCommute: "Aktivera plats för att se livealternativ",
     likelyNow: "Trolig nu",
     calculatingCommute: "Beräknar livealternativ...",
     bestOption: "Bästa alternativ",
     fallbackOption: "Reserv",
+    nextDeparture: "Nästa",
     walkToStop: "Gå till hållplats",
     walkFromStop: "Gå från hållplats",
     vehicleToStop: "Buss till hållplats",
@@ -427,6 +449,11 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     leaveNow: "Gå nu",
     leaveSoon: "Gå snart",
     leaveIn: (minutesText) => `Gå om ${minutesText}`,
+    departsAt: (time) => `Avgår ${time}`,
+    walk: "Gå",
+    transfer: "Byte",
+    totalDuration: (minutes) => `${minutes} min totalt`,
+    transfers: (count) => `${count} byte${count === 1 ? "" : "n"}`,
     trafficMayAffect: "Trafiken kan påverka resan",
     commuteTrafficAlertTitle: "Resevarning",
     commuteTrafficAlertDescription: (origin, destination, incident) => `${incident} kan påverka resan från ${origin} till ${destination}.`,

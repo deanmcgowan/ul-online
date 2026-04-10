@@ -26,7 +26,7 @@ export const DEFAULT_PREFERENCES: AppPreferences = {
   bufferMinutes: 5,
   maxWalkDistanceMeters: 1000,
   highAccuracyLocation: false,
-  stopVisibilityZoom: 14,
+  stopVisibilityZoom: 12,
   language: "system",
 };
 

@@ -1,8 +1,7 @@
 import { useState } from "react";
-import { AlertTriangle, ArrowRight, BellRing, Briefcase, ChevronRight, Home, Loader2, MapPin, Route } from "lucide-react";
+import { AlertTriangle, ArrowRight, BellRing, Briefcase, Bus, ChevronDown, ChevronRight, Footprints, GraduationCap, Home, Loader2, MapPin, Navigation, Route } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import type { CommuteOption, CommutePlan } from "@/hooks/useCommutePlans";
@@ -28,15 +27,38 @@ function formatLeaveGuidance(option: CommuteOption, strings: ReturnType<typeof u
   return strings.leaveIn(formatMinutes(option.slackSeconds, strings.arrivingNow));
 }
 
+function formatTripSummary(option: CommuteOption, strings: ReturnType<typeof useAppPreferences>["strings"]) {
+  const transitLegs = option.legs.filter((l) => l.type === "JNY");
+  const lineNames = transitLegs.map((l) => l.line ?? "?").join(" → ");
+  if (option.departureTime) {
+    return `${lineNames} • ${strings.departsAt(option.departureTime)}`;
+  }
+  return `${lineNames} • ${formatLeaveGuidance(option, strings)}`;
+}
+
+function formatChipLabel(option: CommuteOption) {
+  if (option.departureTime) return option.departureTime;
+  return `${Math.max(1, Math.round(option.vehicleEtaSeconds / 60))} min`;
+}
+
 function getPlaceIcon(place: SavedPlace) {
   switch (place.kind) {
     case "home":
       return Home;
     case "work":
       return Briefcase;
+    case "school":
+      return GraduationCap;
     default:
       return MapPin;
   }
+}
+
+function getOriginLabel(plan: CommutePlan, strings: ReturnType<typeof useAppPreferences>["strings"]) {
+  if (plan.origin.id === "__current_location__") {
+    return strings.yourLocation;
+  }
+  return plan.origin.label;
 }
 
 function getConfidenceClasses(confidence: CommuteOption["confidence"]) {
@@ -94,6 +116,86 @@ function getLikelyAlert(plan: CommutePlan | null, strings: ReturnType<typeof use
   return null;
 }
 
+function TripOptionRow({
+  option,
+  label,
+  expanded,
+  onToggle,
+  strings,
+}: {
+  option: CommuteOption;
+  label: string;
+  expanded: boolean;
+  onToggle: () => void;
+  strings: ReturnType<typeof useAppPreferences>["strings"];
+}) {
+  const transitLegs = option.legs.filter((l) => l.type === "JNY");
+  const lineNames = transitLegs.map((l) => l.line ?? "?").join(" → ");
+
+  return (
+    <div className="rounded-xl border bg-muted/20">
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 p-3 text-left"
+        onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      >
+        <Bus className="h-4 w-4 shrink-0 text-primary" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
+            <Badge className={getConfidenceClasses(option.confidence)} variant="outline">
+              {getConfidenceLabel(option.confidence, strings)}
+            </Badge>
+          </div>
+          <p className="mt-0.5 text-sm font-semibold">
+            {lineNames} • {option.departureTime ?? formatChipLabel(option)}
+            {option.durationMinutes != null && (
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                {strings.totalDuration(option.durationMinutes)}
+              </span>
+            )}
+          </p>
+        </div>
+        {expanded ? (
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        )}
+      </button>
+
+      {expanded && (
+        <div className="space-y-1.5 border-t px-3 pb-3 pt-2 text-xs">
+          {option.legs.map((leg, i) => (
+            <div key={i} className="flex items-start gap-2">
+              {leg.type === "JNY" ? (
+                <Bus className="mt-0.5 h-3 w-3 shrink-0 text-primary" />
+              ) : (
+                <Footprints className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+              )}
+              <div className="min-w-0 flex-1">
+                {leg.type === "JNY" ? (
+                  <p className="text-foreground">
+                    <span className="font-semibold">{leg.line ?? leg.name}</span>
+                    {leg.direction && <span className="text-muted-foreground"> → {leg.direction}</span>}
+                  </p>
+                ) : leg.type === "WALK" ? (
+                  <p className="text-muted-foreground">{strings.walk}{leg.distMeters ? ` ${leg.distMeters} m` : ""}</p>
+                ) : (
+                  <p className="text-muted-foreground">{strings.transfer}</p>
+                )}
+                <p className="text-muted-foreground">
+                  {leg.originTime && <span>{leg.originTime} {leg.originName}</span>}
+                  {leg.destinationTime && <span> → {leg.destinationTime} {leg.destinationName}</span>}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CommuteDashboard({
   plans,
   loading,
@@ -101,6 +203,7 @@ export default function CommuteDashboard({
   onOpenSettings,
   onSelectPlan,
   activePlanId,
+  hasLocation,
   offsetTopClassName = "top-4",
 }: {
   plans: CommutePlan[];
@@ -109,17 +212,17 @@ export default function CommuteDashboard({
   onOpenSettings: () => void;
   onSelectPlan: (plan: CommutePlan) => void;
   activePlanId: string | null;
+  hasLocation: boolean;
   offsetTopClassName?: string;
 }) {
   const { strings } = useAppPreferences();
   const [open, setOpen] = useState(false);
+  const [expandedTripKey, setExpandedTripKey] = useState<string | null>(null);
   const likelyPlan = plans.find((plan) => plan.activeOrigin && plan.bestOption) ?? plans.find((plan) => plan.bestOption) ?? null;
   const likelyAlert = getLikelyAlert(likelyPlan, strings);
-  const compactSummary = likelyPlan?.bestOption
-    ? `${strings.line} ${likelyPlan.bestOption.lineNumber} • ${formatLeaveGuidance(likelyPlan.bestOption, strings)}`
-    : loading
-      ? strings.calculatingCommute
-      : strings.noLiveJourney;
+
+  // Quick commute chips: plans with activeOrigin (from current location / near a place)
+  const quickPlans = plans.filter((plan) => plan.activeOrigin);
 
   if (!hasEnoughPlaces) {
     return (
@@ -142,12 +245,13 @@ export default function CommuteDashboard({
   }
 
   return (
-    <div className={`absolute right-4 z-20 ${offsetTopClassName}`}>
+    <div className={`absolute right-4 z-20 ${offsetTopClassName} flex flex-col pointer-events-none`}>
+      {/* Full commute panel trigger */}
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>
           <Button
             variant="secondary"
-            className="h-auto max-w-[min(18rem,calc(100vw-6rem))] items-start justify-start rounded-2xl border bg-background/95 px-3 py-2.5 text-left shadow-lg backdrop-blur-sm"
+            className="pointer-events-auto h-auto max-w-[min(18rem,calc(100vw-6rem))] items-start justify-start rounded-2xl border bg-background/95 px-3 py-2.5 text-left shadow-lg backdrop-blur-sm"
           >
             <div className="flex w-full items-start gap-3">
               <div className="mt-0.5 rounded-full bg-primary/10 p-2 text-primary">
@@ -158,7 +262,6 @@ export default function CommuteDashboard({
                   <span className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     {strings.commuteDashboardTitle}
                   </span>
-                  {likelyPlan?.activeOrigin && <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">{strings.likelyNow}</Badge>}
                   {likelyAlert && <BellRing className="h-3.5 w-3.5 shrink-0 text-amber-700" />}
                 </div>
                 <div className="mt-1 flex items-start gap-2">
@@ -167,11 +270,17 @@ export default function CommuteDashboard({
                   ) : likelyAlert ? (
                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700" />
                   ) : null}
-                  <span className="line-clamp-2 text-sm font-semibold leading-tight">{compactSummary}</span>
+                  <span className="line-clamp-2 text-sm font-semibold leading-tight">
+                    {likelyPlan?.bestOption
+                      ? formatTripSummary(likelyPlan.bestOption, strings)
+                      : loading
+                        ? strings.calculatingCommute
+                        : strings.noLiveJourney}
+                  </span>
                 </div>
                 {likelyPlan && (
                   <p className="mt-1 truncate text-xs text-muted-foreground">
-                    {likelyPlan.origin.label} <ArrowRight className="mx-1 inline h-3 w-3" /> {likelyPlan.destination.label}
+                    {getOriginLabel(likelyPlan, strings)} <ArrowRight className="mx-1 inline h-3 w-3" /> {likelyPlan.destination.label}
                   </p>
                 )}
               </div>
@@ -180,100 +289,59 @@ export default function CommuteDashboard({
           </Button>
         </SheetTrigger>
 
-        <SheetContent side="right" className="w-[min(26rem,calc(100vw-1rem))] overflow-y-auto border-l bg-background/98 p-0 backdrop-blur-sm">
+        <SheetContent side="right" className="!inset-y-4 !w-[min(26rem,calc(100vw-2rem))] overflow-y-auto rounded-l-2xl">
           <SheetHeader className="border-b px-5 py-4">
             <SheetTitle>{strings.commuteDashboardTitle}</SheetTitle>
             <SheetDescription>
-              {likelyAlert?.description || strings.commuteDashboardEmptyDescription}
+              {strings.commuteDashboardEmptyDescription}
             </SheetDescription>
           </SheetHeader>
 
           <div className="space-y-4 p-4">
-            {likelyAlert && (
-              <Card className="border-amber-200 bg-amber-50">
-                <CardContent className="flex items-start gap-3 p-3">
-                  <BellRing className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-                  <div>
-                    <p className="text-sm font-semibold text-amber-950">{likelyAlert.title}</p>
-                    <p className="text-xs text-amber-900/80">{likelyAlert.description}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
             {plans.map((plan) => {
-              const OriginIcon = getPlaceIcon(plan.origin);
+              const OriginIcon = plan.origin.id === "__current_location__" ? Navigation : getPlaceIcon(plan.origin);
               const DestinationIcon = getPlaceIcon(plan.destination);
-              const isActionable = Boolean(plan.bestOption);
               const isActive = activePlanId === plan.id;
+              const originLabel = getOriginLabel(plan, strings);
 
               if (plan.bestOption) {
                 return (
-                  <button
+                  <div
                     key={plan.id}
-                    type="button"
-                    className={`w-full rounded-lg border bg-background text-left shadow-sm transition-colors hover:bg-accent/20 ${isActive ? "border-primary ring-1 ring-primary/40" : ""}`}
-                    onClick={() => {
-                      onSelectPlan(plan);
-                    }}
+                    className={`rounded-lg border bg-background shadow-sm ${isActive ? "border-primary ring-1 ring-primary/40" : ""}`}
                   >
-                    <CardHeader className="space-y-3 pb-3">
+                    <div className="space-y-2 px-4 pb-2 pt-4">
                       <div className="flex items-center justify-between gap-2">
-                        <CardTitle className="text-sm font-semibold">{strings.commuteDashboardTitle}</CardTitle>
-                        <div className="flex items-center gap-2">
-                          {plan.activeOrigin && <Badge variant="secondary">{strings.likelyNow}</Badge>}
-                          {isActive && <Badge>{strings.showingOnMap}</Badge>}
+                        <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                          <OriginIcon className="h-4 w-4 text-primary" />
+                          <span className="truncate">{originLabel}</span>
+                          <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+                          <DestinationIcon className="h-4 w-4 text-primary" />
+                          <span className="truncate">{plan.destination.label}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {plan.activeOrigin && <Badge variant="secondary" className="text-[10px]">{strings.likelyNow}</Badge>}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                        <OriginIcon className="h-4 w-4 text-primary" />
-                        <span className="truncate">{plan.origin.label}</span>
-                        <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                        <DestinationIcon className="h-4 w-4 text-primary" />
-                        <span className="truncate">{plan.destination.label}</span>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      <div className="space-y-2 rounded-xl border bg-muted/20 p-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-xs uppercase tracking-wide text-muted-foreground">{strings.bestOption}</p>
-                            <p className="text-lg font-semibold">
-                              {strings.line} {plan.bestOption.lineNumber}
-                            </p>
-                          </div>
-                          <Badge className={getConfidenceClasses(plan.bestOption.confidence)} variant="outline">
-                            {getConfidenceLabel(plan.bestOption.confidence, strings)}
-                          </Badge>
-                        </div>
-                        <p className="text-sm font-medium text-foreground">{formatLeaveGuidance(plan.bestOption, strings)}</p>
-                        <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground">
-                          <div>
-                            <p className="font-medium text-foreground">{strings.walkToStop}</p>
-                            <p>{formatMinutes(plan.bestOption.walkSeconds, strings.arrivingNow)}</p>
-                            <p>{plan.bestOption.originStop.stop_name}</p>
-                          </div>
-                          <div>
-                            <p className="font-medium text-foreground">{strings.vehicleToStop}</p>
-                            <p>{formatMinutes(plan.bestOption.vehicleEtaSeconds, strings.arrivingNow)}</p>
-                            <p>{strings.boardAt(plan.bestOption.originStop.stop_name)}</p>
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {strings.getOffAt(plan.bestOption.destinationStop.stop_name)} • {strings.aboutStops(plan.bestOption.stopCount)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {strings.walkFromStop} {formatMinutes(plan.bestOption.destinationWalkSeconds, strings.arrivingNow)} • {plan.bestOption.destinationStop.stop_name}
-                        </p>
-                      </div>
+                    </div>
+
+                    <div className="space-y-2 px-4 pb-3">
+                      <TripOptionRow
+                        option={plan.bestOption}
+                        label={strings.bestOption}
+                        expanded={expandedTripKey === `${plan.id}:best`}
+                        onToggle={() => setExpandedTripKey(expandedTripKey === `${plan.id}:best` ? null : `${plan.id}:best`)}
+                        strings={strings}
+                      />
 
                       {plan.fallbackOption && (
-                        <div className="rounded-xl border border-dashed bg-background/50 p-3 text-xs">
-                          <p className="font-medium text-foreground">{strings.fallbackOption}</p>
-                          <p className="mt-1 text-muted-foreground">
-                            {strings.line} {plan.fallbackOption.lineNumber} • {formatLeaveGuidance(plan.fallbackOption, strings)}
-                          </p>
-                        </div>
+                        <TripOptionRow
+                          option={plan.fallbackOption}
+                          label={strings.nextDeparture}
+                          expanded={expandedTripKey === `${plan.id}:next`}
+                          onToggle={() => setExpandedTripKey(expandedTripKey === `${plan.id}:next` ? null : `${plan.id}:next`)}
+                          strings={strings}
+                        />
                       )}
 
                       {plan.bestOption.trafficImpact && (
@@ -288,103 +356,42 @@ export default function CommuteDashboard({
                         </div>
                       )}
 
-                      <div className={`w-full rounded-md border px-3 py-2 text-center text-sm font-medium ${isActive ? "bg-primary text-primary-foreground" : "bg-background"}`}>
+                      <button
+                        type="button"
+                        className={`w-full rounded-md border px-3 py-2 text-center text-sm font-medium ${isActive ? "bg-primary text-primary-foreground" : "bg-background"}`}
+                        onClick={() => onSelectPlan(plan)}
+                      >
                         {isActive ? strings.showingOnMap : strings.showBoardingStop}
-                      </div>
-                    </CardContent>
-                  </button>
+                      </button>
+                    </div>
+                  </div>
                 );
               }
 
               return (
-                <Card
+                <div
                   key={plan.id}
-                  className={`border bg-background shadow-sm ${isActive ? "border-primary ring-1 ring-primary/40" : ""}`}
+                  className={`rounded-lg border bg-background p-4 shadow-sm ${isActive ? "border-primary ring-1 ring-primary/40" : ""}`}
                 >
-                  <CardHeader className="space-y-3 pb-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <CardTitle className="text-sm font-semibold">{strings.commuteDashboardTitle}</CardTitle>
-                      <div className="flex items-center gap-2">
-                        {plan.activeOrigin && <Badge variant="secondary">{strings.likelyNow}</Badge>}
-                        {isActive && <Badge>{strings.showingOnMap}</Badge>}
-                      </div>
-                    </div>
+                  <div className="flex items-center justify-between gap-2 mb-2">
                     <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                       <OriginIcon className="h-4 w-4 text-primary" />
-                      <span className="truncate">{plan.origin.label}</span>
-                      <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                      <span className="truncate">{originLabel}</span>
+                      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
                       <DestinationIcon className="h-4 w-4 text-primary" />
                       <span className="truncate">{plan.destination.label}</span>
                     </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {loading && !plan.bestOption && !plan.note ? (
-                      <p className="text-sm text-muted-foreground">{strings.calculatingCommute}</p>
-                    ) : plan.bestOption ? (
-                      <>
-                        <div className="space-y-2 rounded-xl border bg-muted/20 p-3">
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <p className="text-xs uppercase tracking-wide text-muted-foreground">{strings.bestOption}</p>
-                              <p className="text-lg font-semibold">
-                                {strings.line} {plan.bestOption.lineNumber}
-                              </p>
-                            </div>
-                            <Badge className={getConfidenceClasses(plan.bestOption.confidence)} variant="outline">
-                              {getConfidenceLabel(plan.bestOption.confidence, strings)}
-                            </Badge>
-                          </div>
-                          <p className="text-sm font-medium text-foreground">{formatLeaveGuidance(plan.bestOption, strings)}</p>
-                          <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground">
-                            <div>
-                              <p className="font-medium text-foreground">{strings.walkToStop}</p>
-                              <p>{formatMinutes(plan.bestOption.walkSeconds, strings.arrivingNow)}</p>
-                              <p>{plan.bestOption.originStop.stop_name}</p>
-                            </div>
-                            <div>
-                              <p className="font-medium text-foreground">{strings.vehicleToStop}</p>
-                              <p>{formatMinutes(plan.bestOption.vehicleEtaSeconds, strings.arrivingNow)}</p>
-                              <p>{strings.boardAt(plan.bestOption.originStop.stop_name)}</p>
-                            </div>
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            {strings.getOffAt(plan.bestOption.destinationStop.stop_name)} • {strings.aboutStops(plan.bestOption.stopCount)}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {strings.walkFromStop} {formatMinutes(plan.bestOption.destinationWalkSeconds, strings.arrivingNow)} • {plan.bestOption.destinationStop.stop_name}
-                          </p>
-                        </div>
-
-                        {plan.fallbackOption && (
-                          <div className="rounded-xl border border-dashed bg-background/50 p-3 text-xs">
-                            <p className="font-medium text-foreground">{strings.fallbackOption}</p>
-                            <p className="mt-1 text-muted-foreground">
-                              {strings.line} {plan.fallbackOption.lineNumber} • {formatLeaveGuidance(plan.fallbackOption, strings)}
-                            </p>
-                          </div>
-                        )}
-
-                        {plan.bestOption.trafficImpact && (
-                          <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-xs text-amber-950">
-                            <div className="flex items-start gap-2">
-                              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-                              <div>
-                                <p className="font-medium">{strings.trafficMayAffect}</p>
-                                <p className="mt-1 text-amber-900/80">{plan.bestOption.trafficImpact.label}</p>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                      </>
-                    ) : (
-                      <div className="rounded-xl border border-dashed bg-muted/20 p-3 text-sm text-muted-foreground">
-                        <p className="font-medium text-foreground">{strings.noLiveJourney}</p>
-                        <p className="mt-1">{plan.note || strings.noLiveJourneyDescription}</p>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+                    {plan.activeOrigin && <Badge variant="secondary" className="text-[10px]">{strings.likelyNow}</Badge>}
+                  </div>
+                  {loading && !plan.bestOption && !plan.note ? (
+                    <p className="text-sm text-muted-foreground">{strings.calculatingCommute}</p>
+                  ) : (
+                    <div className="rounded-xl border border-dashed bg-muted/20 p-3 text-sm text-muted-foreground">
+                      <p className="font-medium text-foreground">{strings.noLiveJourney}</p>
+                      <p className="mt-1">{plan.note || strings.noLiveJourneyDescription}</p>
+                    </div>
+                  )}
+                </div>
               );
             })}
 

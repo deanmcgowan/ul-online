@@ -99,3 +99,45 @@ export function fetchServiceAlerts(language?: string) {
     timestamp: number;
   }>("/service-alerts", language ? { language } : undefined);
 }
+
+/** ResRobot trip leg location */
+export interface ResRobotLegPoint {
+  name: string | null;
+  time: string | null;
+  date: string | null;
+  lat: number | null;
+  lon: number | null;
+  extId: string | null;
+}
+
+/** ResRobot trip leg */
+export interface ResRobotLeg {
+  type: string;
+  name: string | null;
+  direction: string | null;
+  category: string | null;
+  line: string | null;
+  operator: string | null;
+  origin: ResRobotLegPoint;
+  destination: ResRobotLegPoint;
+  dist: number | null;
+}
+
+/** ResRobot trip */
+export interface ResRobotTrip {
+  duration: string | null;
+  legs: ResRobotLeg[];
+}
+
+/** Fetch trip suggestions from ResRobot route planner */
+export function fetchResRobotTrip(body: {
+  originLat: number;
+  originLon: number;
+  destLat: number;
+  destLon: number;
+  numF?: number;
+  lang?: "sv" | "en";
+  walkSpeedKmh?: number;
+}) {
+  return post<{ trips: ResRobotTrip[] }>("/resrobot/trip", body);
+}
