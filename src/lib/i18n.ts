@@ -146,6 +146,9 @@ export interface AppStrings {
   commuteRiskAlert: (origin: string, destination: string, lineNumber: string) => string;
   commuteRiskAlertWithFallback: (origin: string, destination: string, lineNumber: string, fallbackLine: string) => string;
   nextStops: string;
+  nextStop: string;
+  stoppedAt: string;
+  approachingStop: string;
   noResults: string;
   tripCanceled: string;
   delayedBy: (duration: string) => string;
@@ -314,6 +317,9 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     commuteRiskAlert: (origin, destination, lineNumber) => `${origin} to ${destination} is tight for line ${lineNumber}.`,
     commuteRiskAlertWithFallback: (origin, destination, lineNumber, fallbackLine) => `${origin} to ${destination} is tight for line ${lineNumber}. Line ${fallbackLine} is the safer fallback.`,
     nextStops: "Next stops",
+    nextStop: "Next",
+    stoppedAt: "At",
+    approachingStop: "Approaching",
     noResults: "No information available.",
     tripCanceled: "This trip is cancelled",
     delayedBy: (duration) => `Delayed ${duration}`,
@@ -480,6 +486,9 @@ const STRINGS: Record<SupportedLanguage, AppStrings> = {
     commuteRiskAlert: (origin, destination, lineNumber) => `Resan från ${origin} till ${destination} är tajt för linje ${lineNumber}.`,
     commuteRiskAlertWithFallback: (origin, destination, lineNumber, fallbackLine) => `Resan från ${origin} till ${destination} är tajt för linje ${lineNumber}. Linje ${fallbackLine} är ett säkrare reservval.`,
     nextStops: "Nästa hållplatser",
+    nextStop: "Nästa",
+    stoppedAt: "Vid",
+    approachingStop: "Närmar sig",
     noResults: "Ingen information tillgänglig.",
     tripCanceled: "Turen är inställd",
     delayedBy: (duration) => `Försenad ${duration}`,

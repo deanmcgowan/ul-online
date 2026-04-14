@@ -266,6 +266,18 @@ const BusPopup = ({
     return null;
   }, [tripDelay, nextStops]);
 
+  // When no schedule data is available, derive what we can from GTFS-RT fields
+  const nearestStopInfo = useMemo(() => {
+    if (nextStops.length > 0) return null; // schedule data is available
+    if (!vehicle.stopId) return null;
+    const stop = stopById.get(vehicle.stopId);
+    if (!stop) return null;
+    return {
+      name: stop.stop_name,
+      status: vehicle.currentStatus,
+    };
+  }, [nextStops, vehicle.stopId, vehicle.currentStatus, stopById]);
+
   return (
     <div>
       <div className="flex items-start gap-2.5">
@@ -358,6 +370,19 @@ const BusPopup = ({
                 </div>
               );
             })}
+          </div>
+        </div>
+      ) : nearestStopInfo ? (
+        <div className="mt-2 pt-2 border-t">
+          <div className="flex items-center gap-1.5 text-xs">
+            <MapPin className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <span className="flex-1 truncate">
+              {nearestStopInfo.status === "STOPPED_AT"
+                ? `${strings.stoppedAt} ${nearestStopInfo.name}`
+                : nearestStopInfo.status === "INCOMING_AT"
+                  ? `${strings.approachingStop} ${nearestStopInfo.name}`
+                  : `${strings.nextStop}: ${nearestStopInfo.name}`}
+            </span>
           </div>
         </div>
       ) : null}
