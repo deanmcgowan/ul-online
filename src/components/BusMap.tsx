@@ -183,7 +183,6 @@ const BusMap = ({
   const { strings } = useAppPreferences();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<Map | null>(null);
-  const stopRenderFrameRef = useRef<number | null>(null);
   const stopRenderTokenRef = useRef(0);
 
   const vehicleSourceRef = useRef(new VectorSource());
@@ -240,28 +239,49 @@ const BusMap = ({
       return { style: cached, styleKey };
     }
 
-    const style: Style[] = [
-      // Arrow layer: rotates with the map so it always points geographically correct
-      new Style({
-        image: new Icon({
-          img: createBusArrowCanvas(bearingBucket, isToward),
-          size: [64, 64],
-          anchor: [0.5, 0.5],
-          rotateWithView: true,
+    try {
+      const style: Style[] = [
+        // Arrow layer: rotates with the map so it always points geographically correct
+        new Style({
+          image: new Icon({
+            img: createBusArrowCanvas(bearingBucket, isToward),
+            size: [64, 64],
+            anchor: [0.5, 0.5],
+            rotateWithView: true,
+          }),
         }),
-      }),
-      // Body layer: screen-fixed so line numbers are always readable
-      new Style({
-        image: new Icon({
-          img: createBusBodyCanvas(lineNumber, speed),
-          size: [64, 64],
-          anchor: [0.5, 0.5],
+        // Body layer: screen-fixed so line numbers are always readable
+        new Style({
+          image: new Icon({
+            img: createBusBodyCanvas(lineNumber, speed),
+            size: [64, 64],
+            anchor: [0.5, 0.5],
+          }),
         }),
-      }),
-    ];
+      ];
 
-    vehicleStyleCacheRef.current.set(styleKey, style);
-    return { style, styleKey };
+      vehicleStyleCacheRef.current.set(styleKey, style);
+      return { style, styleKey };
+    } catch (err) {
+      console.warn("Failed to create vehicle style for", lineNumber, err);
+      // Fallback: text-only style so the bus is still visible on the map
+      const fallbackStyle: Style[] = [
+        new Style({
+          image: new CircleStyle({
+            radius: 12,
+            fill: new Fill({ color: "#1e293b" }),
+            stroke: new Stroke({ color: "#ffffff", width: 1.5 }),
+          }),
+          text: new Text({
+            text: lineNumber,
+            fill: new Fill({ color: "#ffffff" }),
+            font: "bold 10px system-ui",
+          }),
+        }),
+      ];
+      vehicleStyleCacheRef.current.set(styleKey, fallbackStyle);
+      return { style: fallbackStyle, styleKey };
+    }
   }, []);
 
   // Map initialization
@@ -577,9 +597,6 @@ const BusMap = ({
     map.on("movestart", handleUserInteraction);
 
     return () => {
-      if (stopRenderFrameRef.current !== null) {
-        cancelAnimationFrame(stopRenderFrameRef.current);
-      }
       map.un("moveend", handleMoveEnd);
       map.un("pointerdrag", handleUserInteraction);
       map.un("movestart", handleUserInteraction);
@@ -663,7 +680,7 @@ const BusMap = ({
       stopRenderFrameRef.current = null;
     }
 
-    source.clear(true);
+    source.clear();
 
     if (visibleStopGroups.length === 0) {
       return () => {
@@ -671,44 +688,21 @@ const BusMap = ({
       };
     }
 
-    const CHUNK = 120;
-    let i = 0;
+    // Build all features synchronously and add in one batch so the
+    // ClusterSource receives a single change notification.
+    const features: Feature[] = visibleStopGroups.map((stopGroup) =>
+      new Feature({
+        geometry: new Point(fromLonLat([stopGroup.stop_lon, stopGroup.stop_lat])),
+        featureType: "stop",
+        stopGroup,
+        stopGroupSize: stopGroup.stops.length,
+      }),
+    );
 
-    function addChunk() {
-      if (stopRenderTokenRef.current !== renderToken) return;
-
-      const end = Math.min(i + CHUNK, visibleStopGroups.length);
-      const features: Feature[] = [];
-
-      for (; i < end; i++) {
-        const stopGroup = visibleStopGroups[i];
-        features.push(new Feature({
-          geometry: new Point(fromLonLat([stopGroup.stop_lon, stopGroup.stop_lat])),
-          featureType: "stop",
-          stopGroup,
-          stopGroupSize: stopGroup.stops.length,
-        }));
-      }
-
-      if (features.length > 0) {
-        source.addFeatures(features);
-      }
-
-      if (i < visibleStopGroups.length) {
-        stopRenderFrameRef.current = requestAnimationFrame(addChunk);
-      } else {
-        stopRenderFrameRef.current = null;
-      }
-    }
-
-    stopRenderFrameRef.current = requestAnimationFrame(addChunk);
+    source.addFeatures(features);
 
     return () => {
       stopRenderTokenRef.current++;
-      if (stopRenderFrameRef.current !== null) {
-        cancelAnimationFrame(stopRenderFrameRef.current);
-        stopRenderFrameRef.current = null;
-      }
     };
   }, [visibleStopGroups]);
 

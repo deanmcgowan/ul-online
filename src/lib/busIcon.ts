@@ -34,6 +34,29 @@ export function createBusArrowCanvas(
   return canvas;
 }
 
+/** Draw a rounded rectangle sub-path using arcTo — works in all browsers,
+ *  unlike the newer CanvasRenderingContext2D.roundRect(). */
+function traceRoundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
 export function createBusBodyCanvas(
   lineNumber: string,
   speed?: number,
@@ -56,14 +79,12 @@ export function createBusBodyCanvas(
 
   // Bus body shadow
   ctx.fillStyle = "rgba(0,0,0,0.15)";
-  ctx.beginPath();
-  ctx.roundRect(bx + 1, by + 2, bodyWidth, bodyHeight, 5);
+  traceRoundRect(ctx, bx + 1, by + 2, bodyWidth, bodyHeight, 5);
   ctx.fill();
 
   // Bus body
   ctx.fillStyle = "#1e293b";
-  ctx.beginPath();
-  ctx.roundRect(bx, by, bodyWidth, bodyHeight, 5);
+  traceRoundRect(ctx, bx, by, bodyWidth, bodyHeight, 5);
   ctx.fill();
 
   // Border
