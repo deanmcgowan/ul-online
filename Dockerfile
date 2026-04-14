@@ -38,7 +38,7 @@ COPY --from=build /app/dist-server ./dist-server
 RUN mkdir -p /app/data
 
 # Seed with pre-built GTFS database if available (avoids Trafiklab rate limits)
-COPY data/gtfs.db* /app/data/
+COPY data/ /app/data/
 
 ENV NODE_ENV=production
 ENV PORT=8080

@@ -3,6 +3,7 @@ dist
 dist-server
 data/*
 !data/gtfs.db
+!data/.gitkeep
 .git
 .vscode
 .DS_Store
