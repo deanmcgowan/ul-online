@@ -183,8 +183,6 @@ const BusMap = ({
   const { strings } = useAppPreferences();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<Map | null>(null);
-  const stopRenderTokenRef = useRef(0);
-
   const vehicleSourceRef = useRef(new VectorSource());
   const stopsRawSourceRef = useRef(new VectorSource());
   const userSourceRef = useRef(new VectorSource());
@@ -670,22 +668,16 @@ const BusMap = ({
     }
   }, [vehicles, routeMap, filteredStop, getVehicleStyle, tripDelayMap]);
 
-  // Update stops in chunks to avoid blocking main thread
+  // Update stops — rebuild features when the visible set changes
   useEffect(() => {
     const source = stopsRawSourceRef.current;
-    const renderToken = ++stopRenderTokenRef.current;
 
-    if (stopRenderFrameRef.current !== null) {
-      cancelAnimationFrame(stopRenderFrameRef.current);
-      stopRenderFrameRef.current = null;
-    }
-
+    // Use clear() (not clear(true)) so the ClusterSource is notified
+    // via the 'change' event and recalculates clusters correctly.
     source.clear();
 
     if (visibleStopGroups.length === 0) {
-      return () => {
-        stopRenderTokenRef.current++;
-      };
+      return;
     }
 
     // Build all features synchronously and add in one batch so the
@@ -700,10 +692,6 @@ const BusMap = ({
     );
 
     source.addFeatures(features);
-
-    return () => {
-      stopRenderTokenRef.current++;
-    };
   }, [visibleStopGroups]);
 
   // Update user location + buffers
