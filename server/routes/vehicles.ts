@@ -145,13 +145,14 @@ vehiclesRoute.post("/", async (c) => {
       timestamp: e.vehicle.timestamp || 0,
     }));
 
-  // Look up route_id from transit_trips for vehicles missing routeId
+  // Resolve route_id from transit_trips for all vehicles using the static GTFS as the
+  // authoritative source.  The GTFS-RT feed may provide a routeId in a different format
+  // (or omit it entirely), so we always prefer the DB-derived value over the RT value.
   const tripIdsToResolve = [
     ...new Set(
       vehicles
-        .filter((v) => !v.routeId && v.tripId)
+        .filter((v) => v.tripId && !getCachedRouteId(v.tripId))
         .map((v) => v.tripId)
-        .filter((tripId: string) => !getCachedRouteId(tripId))
     ),
   ];
 
@@ -170,9 +171,15 @@ vehiclesRoute.post("/", async (c) => {
       }
 
       for (const v of vehicles) {
-        if (!v.routeId && v.tripId) {
+        if (v.tripId) {
           const found = rows.find((r) => r.trip_id === v.tripId);
-          v.routeId = found?.route_id || getCachedRouteId(v.tripId) || "";
+          const resolvedRouteId = found?.route_id || getCachedRouteId(v.tripId);
+          if (resolvedRouteId) {
+            // Prefer the static-GTFS route_id over whatever the RT feed sent.
+            v.routeId = resolvedRouteId;
+          }
+          // If nothing is found in the DB the original RT routeId (which may be empty)
+          // is kept as-is; the client already handles the empty/unknown case with "?".
         }
       }
     } catch (e: any) {
@@ -180,8 +187,11 @@ vehiclesRoute.post("/", async (c) => {
     }
   } else {
     for (const v of vehicles) {
-      if (!v.routeId && v.tripId) {
-        v.routeId = getCachedRouteId(v.tripId) || "";
+      if (v.tripId) {
+        const cached = getCachedRouteId(v.tripId);
+        if (cached) {
+          v.routeId = cached;
+        }
       }
     }
   }
