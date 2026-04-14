@@ -360,7 +360,7 @@ const Index = () => {
         duration: 500,
       });
     }
-  }, [userLocation, mapInstance, runSpeed, bufferMinutes]);
+  }, [userLocation, mapInstance, walkSpeed, bufferMinutes]);
 
   const handleToggleFavorite = useCallback(
     (stop: TransitStop) => {

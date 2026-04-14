@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AppPreferencesProvider, useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { Toaster } from "@/components/ui/toaster";
 import InstallBanner from "@/components/InstallBanner";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Index from "./pages/Index.tsx";
 const Settings = lazy(() => import("./pages/Settings.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
@@ -42,11 +43,13 @@ const AppRoutes = () => (
 );
 
 const App = () => (
-  <AppPreferencesProvider>
-    <AppRoutes />
-    <Toaster />
-    <InstallBanner />
-  </AppPreferencesProvider>
+  <ErrorBoundary>
+    <AppPreferencesProvider>
+      <AppRoutes />
+      <Toaster />
+      <InstallBanner />
+    </AppPreferencesProvider>
+  </ErrorBoundary>
 );
 
 export default App;
