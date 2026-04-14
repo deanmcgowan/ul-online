@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import protobuf from "protobufjs";
+import { getDb } from "../db.js";
 
 const PROTO_DEF = `
 syntax = "proto2";
@@ -80,6 +81,26 @@ interface TripDelay {
 let cache: { data: TripDelay[]; timestamp: number; fetchedAt: number } | null = null;
 const CACHE_TTL_MS = 15_000;
 
+const TRIP_ROUTE_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
+const tripRouteCache = new Map<string, { routeId: string; expiresAt: number }>();
+
+function getCachedRouteId(tripId: string): string | null {
+  const cached = tripRouteCache.get(tripId);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    tripRouteCache.delete(tripId);
+    return null;
+  }
+  return cached.routeId;
+}
+
+function setCachedRouteId(tripId: string, routeId: string) {
+  tripRouteCache.set(tripId, {
+    routeId,
+    expiresAt: Date.now() + TRIP_ROUTE_CACHE_TTL_MS,
+  });
+}
+
 const SCHEDULE_RELATIONSHIP: Record<number, string> = {
   0: "SCHEDULED",
   1: "ADDED",
@@ -143,6 +164,53 @@ tripUpdatesRoute.post("/", async (c) => {
       };
     });
   /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  // Resolve routeId from static GTFS — same approach as vehicles.ts so the
+  // client receives consistent route IDs across both endpoints.
+  const tripIdsToResolve = [
+    ...new Set(
+      tripUpdates
+        .filter((tu) => tu.tripId && !getCachedRouteId(tu.tripId))
+        .map((tu) => tu.tripId)
+    ),
+  ];
+
+  if (tripIdsToResolve.length > 0) {
+    try {
+      const db = getDb();
+      const placeholders = tripIdsToResolve.map(() => "?").join(",");
+      const rows = db
+        .prepare(`SELECT trip_id, route_id FROM transit_trips WHERE trip_id IN (${placeholders})`)
+        .all(...tripIdsToResolve) as { trip_id: string; route_id: string }[];
+
+      for (const row of rows) {
+        if (row.route_id) {
+          setCachedRouteId(row.trip_id, row.route_id);
+        }
+      }
+
+      for (const tu of tripUpdates) {
+        if (tu.tripId) {
+          const found = rows.find((r) => r.trip_id === tu.tripId);
+          const resolvedRouteId = found?.route_id || getCachedRouteId(tu.tripId);
+          if (resolvedRouteId) {
+            tu.routeId = resolvedRouteId;
+          }
+        }
+      }
+    } catch (e: unknown) {
+      console.error("Trip-updates route lookup error:", e instanceof Error ? e.message : e);
+    }
+  } else {
+    for (const tu of tripUpdates) {
+      if (tu.tripId) {
+        const cached = getCachedRouteId(tu.tripId);
+        if (cached) {
+          tu.routeId = cached;
+        }
+      }
+    }
+  }
 
   cache = {
     data: tripUpdates,

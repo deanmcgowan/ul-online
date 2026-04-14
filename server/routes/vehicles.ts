@@ -170,6 +170,10 @@ vehiclesRoute.post("/", async (c) => {
         }
       }
 
+      let dbResolved = 0;
+      let cacheResolved = 0;
+      let unresolved = 0;
+
       for (const v of vehicles) {
         if (v.tripId) {
           const found = rows.find((r) => r.trip_id === v.tripId);
@@ -177,10 +181,20 @@ vehiclesRoute.post("/", async (c) => {
           if (resolvedRouteId) {
             // Prefer the static-GTFS route_id over whatever the RT feed sent.
             v.routeId = resolvedRouteId;
+            if (found?.route_id) dbResolved++;
+            else cacheResolved++;
+          } else {
+            unresolved++;
           }
           // If nothing is found in the DB the original RT routeId (which may be empty)
           // is kept as-is; the client already handles the empty/unknown case with "?".
         }
+      }
+
+      if (unresolved > 0) {
+        console.warn(
+          `Vehicle route resolution: ${dbResolved} from DB, ${cacheResolved} from cache, ${unresolved} unresolved out of ${vehicles.length} vehicles`
+        );
       }
     } catch (e: any) {
       console.error("Trip lookup error:", e.message);
