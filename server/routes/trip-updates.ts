@@ -81,7 +81,7 @@ interface TripDelay {
 let cache: { data: TripDelay[]; timestamp: number; fetchedAt: number } | null = null;
 const CACHE_TTL_MS = 15_000;
 
-const TRIP_ROUTE_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
+const TRIP_ROUTE_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const tripRouteCache = new Map<string, { routeId: string; expiresAt: number }>();
 
 function getCachedRouteId(tripId: string): string | null {

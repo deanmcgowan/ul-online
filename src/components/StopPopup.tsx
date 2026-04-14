@@ -62,6 +62,9 @@ const SAME_TRIP_CONTINUITY_BONUS_SECONDS = 75;
 const MAX_SAME_TRIP_INCREASE_SECONDS = 45;
 const FALLBACK_MAX_DISTANCE_METERS = 5000;
 const FALLBACK_ALLOW_NON_APPROACHING_ETA_SECONDS = 300;
+/** When we have no route info and must rely on proximity alone, use a tighter
+ *  ETA threshold to avoid showing irrelevant vehicles. */
+const FALLBACK_NO_ROUTE_ETA_SECONDS = 150;
 const ROAD_DISTANCE_FACTOR = 1.4;
 const STOPPED_AT_DWELL_SECONDS = 25;
 const NEARBY_STOP_MATCH_RADIUS_METERS = 150;
@@ -240,7 +243,7 @@ export function buildFallbackArrivalEstimate(
       // only accept vehicles that are clearly approaching this stop.
       const maxEtaForNoRoute = hasRouteInfo
         ? FALLBACK_ALLOW_NON_APPROACHING_ETA_SECONDS
-        : FALLBACK_ALLOW_NON_APPROACHING_ETA_SECONDS / 2;
+        : FALLBACK_NO_ROUTE_ETA_SECONDS;
       if (!isTowardStop && directEtaSeconds > maxEtaForNoRoute) {
         return null;
       }

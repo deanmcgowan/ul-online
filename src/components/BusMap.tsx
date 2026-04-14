@@ -405,9 +405,11 @@ const BusMap = ({
     applyMapboxStyle(map, "https://tiles.openfreemap.org/styles/bright")
       .then(() => {
         enforceBaseLayerZIndex();
-        // Re-check after a short delay in case any layers were added asynchronously
-        // by the tile style (e.g. sprite/font loading triggers).
-        setTimeout(enforceBaseLayerZIndex, 500);
+        // Re-check after a short delay — some tile style resources (sprites,
+        // fonts) load asynchronously and may cause new layers to be appended
+        // after the Promise resolves.
+        const BASE_LAYER_RECHECK_MS = 500;
+        setTimeout(enforceBaseLayerZIndex, BASE_LAYER_RECHECK_MS);
       })
       .catch(
         (err: unknown) => console.warn("Vector tile style failed, map will have no base layer", err),
