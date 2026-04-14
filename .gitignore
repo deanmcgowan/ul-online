@@ -16,7 +16,8 @@ node_modules
 dist
 dist-server
 dist-ssr
-data/
+data/*
+!data/.gitkeep
 *.local
 
 # Editor directories and files
