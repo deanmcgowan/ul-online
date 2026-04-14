@@ -388,9 +388,23 @@ const BusMap = ({
     mapRef.current = map;
 
     // Apply OpenFreeMap vector tile base map (labels stay upright when rotated)
-    applyMapboxStyle(map, "https://tiles.openfreemap.org/styles/bright").catch(
-      (err: unknown) => console.warn("Vector tile style failed, map will have no base layer", err),
-    );
+    applyMapboxStyle(map, "https://tiles.openfreemap.org/styles/bright")
+      .then(() => {
+        // Tile layers added by applyMapboxStyle have no explicit zIndex. OpenLayers sorts
+        // layers by (a.zIndex - b.zIndex), which produces NaN for undefined values. In V8,
+        // NaN comparisons preserve the original insertion order, so these layers — appended
+        // after the user layers — stay at the end of the sorted array and render on top,
+        // covering stop circles and other overlays.  Setting an explicit zIndex of 0 ensures
+        // the base map stays below all user layers (stops z:5, vehicles z:10, etc.).
+        map.getLayers().getArray().forEach((layer) => {
+          if (layer.getZIndex() === undefined) {
+            layer.setZIndex(0);
+          }
+        });
+      })
+      .catch(
+        (err: unknown) => console.warn("Vector tile style failed, map will have no base layer", err),
+      );
 
     onMapReady?.(map);
     setStopViewportVersion((value) => value + 1);

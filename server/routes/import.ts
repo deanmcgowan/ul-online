@@ -230,6 +230,9 @@ export async function runGtfsImport(): Promise<{
     });
 
     const importStopRoutes = db.transaction(() => {
+      // Clear first so stale entries from a previous import (potentially using a
+      // different route ID format) do not persist alongside the new ones.
+      db.exec("DELETE FROM stop_routes");
       const upsertSR = db.prepare(
         `INSERT INTO stop_routes (stop_id, route_id) VALUES (?, ?)
          ON CONFLICT(stop_id, route_id) DO NOTHING`
