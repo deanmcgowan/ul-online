@@ -62,6 +62,9 @@ const SAME_TRIP_CONTINUITY_BONUS_SECONDS = 75;
 const MAX_SAME_TRIP_INCREASE_SECONDS = 45;
 const FALLBACK_MAX_DISTANCE_METERS = 5000;
 const FALLBACK_ALLOW_NON_APPROACHING_ETA_SECONDS = 300;
+/** When we have no route info and must rely on proximity alone, use a tighter
+ *  ETA threshold to avoid showing irrelevant vehicles. */
+const FALLBACK_NO_ROUTE_ETA_SECONDS = 150;
 const ROAD_DISTANCE_FACTOR = 1.4;
 const STOPPED_AT_DWELL_SECONDS = 25;
 const NEARBY_STOP_MATCH_RADIUS_METERS = 150;
@@ -177,15 +180,37 @@ export function buildFallbackArrivalEstimate(
   stopNameById?: ReadonlyMap<string, string>,
 ): ArrivalResult | null {
   const platformRouteIds = new Set(platform.routeIds);
-  if (platformRouteIds.size === 0) {
-    return null;
-  }
+  // Build a set of known short names for the platform's routes so we can also
+  // match vehicles whose routeId is the display-ready short name (e.g. "2")
+  // rather than the long-form static route_id.
+  const platformShortNames = new Set(
+    platform.routeIds.map((rid) => routeMap[rid]).filter(Boolean),
+  );
+  const hasRouteInfo = platformRouteIds.size > 0;
 
   const candidates = vehicles
     .filter((vehicle) => {
-      if (!vehicle.tripId || !platformRouteIds.has(vehicle.routeId)) {
+      if (!vehicle.tripId) {
         return false;
       }
+
+      // When we have route associations, filter by route.  Accept the vehicle
+      // if its routeId matches a platform route_id OR its routeId is already
+      // a known short name for one of the platform's routes.
+      if (hasRouteInfo) {
+        const matchesRouteId = platformRouteIds.has(vehicle.routeId);
+        const matchesShortName = platformShortNames.has(vehicle.routeId);
+        const shortNameOfVehicle = routeMap[vehicle.routeId];
+        const matchesViaShortName = shortNameOfVehicle
+          ? platformShortNames.has(shortNameOfVehicle)
+          : false;
+        if (!matchesRouteId && !matchesShortName && !matchesViaShortName) {
+          return false;
+        }
+      }
+      // When no route info is available (stop_routes empty/stale), allow all
+      // vehicles through — the distance/bearing checks below will filter out
+      // irrelevant ones.
 
       const tripRows = tripScheduleMap?.get(vehicle.tripId) ?? [];
       if (tripRows.length > 0) {
@@ -214,7 +239,12 @@ export function buildFallbackArrivalEstimate(
       const assumedSpeed = Math.max(vehicle.speed || 0, 4);
       const directEtaSeconds = Math.round(closestPlatformStop.distanceMeters / assumedSpeed);
 
-      if (!isTowardStop && directEtaSeconds > FALLBACK_ALLOW_NON_APPROACHING_ETA_SECONDS) {
+      // When we have no route info and rely purely on proximity, be stricter:
+      // only accept vehicles that are clearly approaching this stop.
+      const maxEtaForNoRoute = hasRouteInfo
+        ? FALLBACK_ALLOW_NON_APPROACHING_ETA_SECONDS
+        : FALLBACK_NO_ROUTE_ETA_SECONDS;
+      if (!isTowardStop && directEtaSeconds > maxEtaForNoRoute) {
         return null;
       }
 

@@ -35,8 +35,30 @@ app.route("/api/push", pushRoute);
 app.route("/api/walk-distance", walkDistanceRoute);
 app.route("/api/import", importRoute);
 
-// Health check
-app.get("/api/health", (c) => c.json({ status: "ok" }));
+// Health check + data diagnostics
+app.get("/api/health", (c) => {
+  const db = getDb();
+  const stopsCount = (db.prepare("SELECT COUNT(*) AS n FROM transit_stops").get() as { n: number }).n;
+  const routesCount = (db.prepare("SELECT COUNT(*) AS n FROM transit_routes").get() as { n: number }).n;
+  const tripsCount = (db.prepare("SELECT COUNT(*) AS n FROM transit_trips").get() as { n: number }).n;
+  const stopTimesCount = (db.prepare("SELECT COUNT(*) AS n FROM stop_times").get() as { n: number }).n;
+  const stopRoutesCount = (db.prepare("SELECT COUNT(*) AS n FROM stop_routes").get() as { n: number }).n;
+  const meta = db.prepare("SELECT value, updated_at FROM static_data_meta WHERE key = ?")
+    .get("combined_hash") as { value: string; updated_at: string } | undefined;
+
+  return c.json({
+    status: "ok",
+    data: {
+      stops: stopsCount,
+      routes: routesCount,
+      trips: tripsCount,
+      stopTimes: stopTimesCount,
+      stopRoutes: stopRoutesCount,
+      hash: meta?.value || "none",
+      lastImport: meta?.updated_at || "never",
+    },
+  });
+});
 
 // ── Static file serving (production) ────────────────────────
 const distDir = path.resolve(process.cwd(), "dist");

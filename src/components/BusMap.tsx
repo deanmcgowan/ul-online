@@ -203,6 +203,10 @@ const BusMap = ({
   const isAnimatingRef = useRef(false);
   const closePopupRef = useRef<() => void>(() => {});
 
+  // Build a set of known route short names so we can recognise when a raw RT
+  // routeId already IS the display-ready short name (e.g. "2" for bus 2).
+  const knownShortNames = useMemo(() => new Set(Object.values(routeMap)), [routeMap]);
+
   // Memoize filtered + deduplicated stops
   const processedStopGroups = useMemo(() => {
     return buildStopGroups(stops, stopRoutes);
@@ -388,23 +392,33 @@ const BusMap = ({
     mapRef.current = map;
 
     // Apply OpenFreeMap vector tile base map (labels stay upright when rotated)
+    // Helper: ensure all base map layers have zIndex 0 so they render below
+    // user layers (stops z:5, vehicles z:10, etc.).
+    const enforceBaseLayerZIndex = () => {
+      map.getLayers().getArray().forEach((layer) => {
+        if (layer.getZIndex() === undefined) {
+          layer.setZIndex(0);
+        }
+      });
+    };
+
     applyMapboxStyle(map, "https://tiles.openfreemap.org/styles/bright")
       .then(() => {
-        // Tile layers added by applyMapboxStyle have no explicit zIndex. OpenLayers sorts
-        // layers by (a.zIndex - b.zIndex), which produces NaN for undefined values. In V8,
-        // NaN comparisons preserve the original insertion order, so these layers — appended
-        // after the user layers — stay at the end of the sorted array and render on top,
-        // covering stop circles and other overlays.  Setting an explicit zIndex of 0 ensures
-        // the base map stays below all user layers (stops z:5, vehicles z:10, etc.).
-        map.getLayers().getArray().forEach((layer) => {
-          if (layer.getZIndex() === undefined) {
-            layer.setZIndex(0);
-          }
-        });
+        enforceBaseLayerZIndex();
+        // Re-check after a short delay — some tile style resources (sprites,
+        // fonts) load asynchronously and may cause new layers to be appended
+        // after the Promise resolves.
+        const BASE_LAYER_RECHECK_MS = 500;
+        setTimeout(enforceBaseLayerZIndex, BASE_LAYER_RECHECK_MS);
       })
       .catch(
         (err: unknown) => console.warn("Vector tile style failed, map will have no base layer", err),
       );
+
+    // Also enforce whenever layers change (new layers added later by tile style updates).
+    map.getLayers().on("add", () => {
+      enforceBaseLayerZIndex();
+    });
 
     onMapReady?.(map);
     setStopViewportVersion((value) => value + 1);
@@ -624,8 +638,15 @@ const BusMap = ({
 
     vehicles.forEach((v) => {
       // Primary: routeMap from static data. Fallback: use routeId from trip updates (same RT feed).
+      // If the RT routeId already IS a known short name (e.g. "2"), use it directly.
       const tripDelayRouteId = tripDelayMap?.get(v.tripId)?.routeId;
-      const lineNumber = routeMap[v.routeId] || (tripDelayRouteId ? routeMap[tripDelayRouteId] : "") || v.vehicleLabel || "?";
+      const lineNumber =
+        routeMap[v.routeId] ||
+        (v.routeId && knownShortNames.has(v.routeId) ? v.routeId : "") ||
+        (tripDelayRouteId ? routeMap[tripDelayRouteId] : "") ||
+        (tripDelayRouteId && knownShortNames.has(tripDelayRouteId) ? tripDelayRouteId : "") ||
+        v.vehicleLabel ||
+        "?";
 
       let isToward: boolean | undefined;
       if (filteredStop) {
@@ -680,7 +701,7 @@ const BusMap = ({
         featureMap.delete(vehicleId);
       }
     }
-  }, [vehicles, routeMap, filteredStop, getVehicleStyle, tripDelayMap]);
+  }, [vehicles, routeMap, knownShortNames, filteredStop, getVehicleStyle, tripDelayMap]);
 
   // Update stops — rebuild features when the visible set changes
   useEffect(() => {
